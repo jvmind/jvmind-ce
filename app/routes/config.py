@@ -92,10 +92,17 @@ def test_config(request: Request, req: ConnTestReq):
         api_key = req.openai_api_key
         if not api_key or (isinstance(api_key, str) and "*" in api_key):
             api_key = saved.openai_api_key
-        base_url = validate_openai_base_url(req.openai_base_url or saved.openai_base_url)
+        base_url_arg = req.openai_base_url or saved.openai_base_url
+        is_local = base_url_arg and any(h in base_url_arg.lower() for h in ("localhost", "127.0.0.1"))
+        base_url = validate_openai_base_url(base_url_arg, allow_local=is_local)
         model = req.openai_model or saved.openai_model
     if not api_key:
-        raise HTTPException(400, "未提供 API Key / No API Key provided")
+        base_url_for_check = base_url or req.openai_base_url or saved.openai_base_url or ""
+        is_local_keyless = any(h in base_url_for_check.lower() for h in ("localhost", "127.0.0.1"))
+        if is_local_keyless:
+            api_key = "noop"  # Ollama 本地不需要 API Key
+        else:
+            raise HTTPException(400, "未提供 API Key / No API Key provided")
     t0 = _time.time()
     try:
         client = OpenAI(api_key=api_key, base_url=base_url, timeout=15.0)

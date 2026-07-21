@@ -8,7 +8,6 @@ document.body.innerHTML = `
   <div id="appContent"></div>
   <div id="userInfo"></div>
   <div id="userNameLabel"></div>
-  <div id="adminBtn"></div>
   <div id="sbConfigBtn"></div>
   <div id="sbThemeToggle"></div>
   <div id="configPrompt"></div>

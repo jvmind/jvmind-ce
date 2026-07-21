@@ -75,6 +75,22 @@ setOnSaved(async (data) => {
   }
   await app.checkHealth();
   if (state.agentReady) await app.loadSessions();
+  const badge = document.getElementById("modelLabel");
+  if (badge && data.config) {
+    const cfg = data.config;
+    const model = cfg.openai_model || "";
+    badge.onclick = null;
+    badge.style.cursor = "";
+    if (model) {
+      const fromUrl = cfg.openai_base_url ? new URL(cfg.openai_base_url).hostname.replace(/^api\.|\.com$/g, "") : "";
+      badge.title = cfg.openai_base_url || "";
+      badge.innerHTML = fromUrl ? `<span class="provider">${escapeHtml(fromUrl)}</span> · ${escapeHtml(model)}` : escapeHtml(model);
+    } else {
+      badge.innerHTML = `<span style="color:var(--text-dim);font-size:12px;">⚙️ ${t("config.no_model")}</span>`;
+      badge.onclick = () => document.getElementById("sbConfigBtn")?.click();
+      badge.style.cursor = "pointer";
+    }
+  }
 });
 
 // ============================================================
@@ -122,7 +138,24 @@ async function initApp() {
   await app.checkHealth();
   try {
     const cfg = await api("/api/config");
-    state.llmConfigured = !cfg.use_built_in && !!cfg.openai_base_url && !!cfg.openai_model;
+    const model = cfg.openai_model || "";
+    const hasBuiltIn = cfg.use_built_in && !!cfg.note;
+    state.llmConfigured = !cfg.use_built_in && !!cfg.openai_base_url && !!model;
+    const badge = document.getElementById("modelLabel");
+    if (badge) {
+      if (hasBuiltIn && model) {
+        badge.title = cfg.openai_base_url || "";
+        badge.innerHTML = `<span class="provider">内置 · ${escapeHtml(model)}</span>`;
+      } else if (model) {
+        const fromUrl = cfg.openai_base_url ? new URL(cfg.openai_base_url).hostname.replace(/^api\.|\.com$/g, "") : "";
+        badge.title = cfg.openai_base_url || "";
+        badge.innerHTML = fromUrl ? `<span class="provider">${escapeHtml(fromUrl)}</span> · ${escapeHtml(model)}` : escapeHtml(model);
+      } else {
+        badge.innerHTML = `<span style="color:var(--text-dim);font-size:12px;">⚙️ ${t("config.no_model")}</span>`;
+        badge.onclick = () => document.getElementById("sbConfigBtn")?.click();
+        badge.style.cursor = "pointer";
+      }
+    }
   } catch {}
   await app.loadSessions();
   await app.updateConfigPrompt();

@@ -45,3 +45,9 @@ skills-lock.json
 # Data backups (DO NOT COMMIT — may contain encrypted user data)
 backups/
 .cortexkit/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.whl

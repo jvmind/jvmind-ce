@@ -129,14 +129,17 @@ def encrypt_config_patch(patch: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def validate_openai_base_url(value: str) -> str:
+def validate_openai_base_url(value: str, allow_local: bool = False) -> str:
     url = (value or "").strip()
     parsed = urlparse(url)
-    if parsed.scheme != "https":
-        raise ValueError("Base URL 必须使用 https")
     if not parsed.hostname:
         raise ValueError("Base URL 缺少 host")
     host = parsed.hostname.lower()
+    is_local = host in ("localhost", "127.0.0.1", "::1")
+    if allow_local and is_local:
+        return url.rstrip("/")
+    if parsed.scheme != "https":
+        raise ValueError("Base URL 必须使用 https")
     _raw = os.getenv("OPENAI_BASE_URL_ALLOWLIST", "")
     allow = []
     for h in _raw.split(","):

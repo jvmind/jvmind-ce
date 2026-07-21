@@ -24,9 +24,6 @@ app.showAuthUI = async function showAuthUI(user) {
   if (nameLabel) nameLabel.textContent = user.username || user.email || "";
   const info = document.getElementById("userInfo");
   if (info) info.style.display = "flex";
-  const adminBtn = document.getElementById("adminBtn");
-  if (adminBtn) adminBtn.style.display = user.is_admin ? "" : "none";
-
   document.querySelectorAll("[data-auth-visibility]").forEach(el => {
     const v = el.dataset.authVisibility;
     if (v === "logged-in") el.style.display = user ? "" : "none";

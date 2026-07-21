@@ -318,6 +318,7 @@
   "config.test_reply_sample": "回复样例：",
   "config.preset_qwen": "通义千问 · qwen-plus",
   "config.preset_kimi": "Kimi · moonshot-v1-8k",
+  "config.preset_ollama": "Ollama · 本地模型",
   "config.cancel": "取消",
   "config.save": "保存并应用",
   "config.save_error": "保存失败：{msg}",

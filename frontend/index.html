@@ -24,8 +24,6 @@
       <div style="display:flex;align-items:center;gap:6px;">
         <span id="statusDot" class="status-dot" style="flex-shrink:0;"></span>
         <span id="statusText" style="white-space:nowrap;color:var(--text-dim);"></span>
-        <span id="planBadge" style="flex-shrink:0;font-size:11px;padding:1px 6px;border:1px solid var(--border);border-radius:4px;"></span>
-        <button class="btn" id="adminBtn" data-i18n-title="sidebar.admin" style="flex-shrink:0;font-size:10px;padding:1px 6px;display:none;"><span data-ico="Shield"></span></button>
         <button class="btn" id="logoutBtn" data-i18n-title="sidebar.logout" data-i18n="sidebar.logout" style="flex-shrink:0;font-size:10px;padding:1px 6px;margin-left:auto;"></button>
       </div>
     </div>
@@ -154,6 +152,7 @@
             <span class="preset-chip" data-preset='{"openai_base_url":"https://api.deepseek.com/v1","openai_model":"deepseek-chat"}'>DeepSeek · v3</span>
 	            <span class="preset-chip" data-preset='{"openai_base_url":"https://dashscope.aliyuncs.com/compatible-mode/v1","openai_model":"qwen-plus"}' data-i18n="config.preset_qwen">通义千问 · qwen-plus</span>
 		            <span class="preset-chip" data-preset='{"openai_base_url":"https://api.moonshot.cn/v1","openai_model":"moonshot-v1-8k"}' data-i18n="config.preset_kimi">Kimi · moonshot-v1-8k</span>
+		            <span class="preset-chip" data-preset='{"openai_base_url":"http://localhost:11434/v1","openai_model":"qwen2.5"}' data-i18n="config.preset_ollama">Ollama · 本地</span>
 	          </div>
         </div>
 

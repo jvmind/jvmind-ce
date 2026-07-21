@@ -278,7 +278,11 @@ def _get_agent(user_id: str):
 
             from react_agent.config import validate_openai_base_url
             api_key = cfg.get("openai_api_key", "") or ""
-            base_url = validate_openai_base_url(cfg.get("openai_base_url", "") or "https://api.deepseek.com/v1")
+            user_base_url = cfg.get("openai_base_url", "") or "https://api.deepseek.com/v1"
+            is_local = any(h in user_base_url.lower() for h in ("localhost", "127.0.0.1"))
+            base_url = validate_openai_base_url(user_base_url, allow_local=is_local)
+            if is_local and not api_key:
+                api_key = "noop"  # Ollama 本地不需要 API Key
             model = cfg.get("openai_model", "") or "deepseek-chat"
 
             memory = state.MemoryImpl(user_id=user_id, session_dir=f"{session_dir}/{user_id}")

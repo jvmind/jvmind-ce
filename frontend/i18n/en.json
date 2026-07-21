@@ -314,6 +314,7 @@
   "config.test_reply_sample": "Sample reply: ",
   "config.preset_qwen": "Qwen · qwen-plus",
   "config.preset_kimi": "Kimi · moonshot-v1-8k",
+  "config.preset_ollama": "Ollama · Local Model",
   "config.cancel": "Cancel",
   "config.save": "Save & Apply",
   "config.save_error": "Save failed: {msg}",

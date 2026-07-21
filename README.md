@@ -2,8 +2,6 @@
 
 > An AI-powered JVM diagnostics agent. **Single-user · local-first · open source.**
 >
-> 一个 AI 驱动的 JVM 诊断智能体。**单用户 · 本地优先 · 开源。**
->
 > [中文文档 (Chinese)](./README.zh-CN.md) · [Report a bug](https://github.com/jvmind/jvmind-ce/issues/new?template=bug.md) · [Request a feature](https://github.com/jvmind/jvmind-ce/issues/new?template=feature.md)
 
 JVMind CE is a JVM performance diagnostics assistant built on OpenAI-compatible LLMs. It runs the agent as a local web service, accepts uploaded logs/dumps, and streams diagnostic conclusions back over SSE.
@@ -11,11 +9,13 @@ JVMind CE is a JVM performance diagnostics assistant built on OpenAI-compatible 
 - 🧠 **LangGraph agent** — Tool orchestration via LangGraph state machines (native OpenAI function-calling).
 - 🪵 **GC log analysis** — JDK 8 / 11 / 17 / 21 / 25 collectors (G1, Parallel, ZGC, Shenandoah, Serial, CMS). Pure regex parsers, no external runtime deps.
 - 🧵 **jstack thread analysis** — Deadlock detection, lock-contention hotspots, thread-pool distribution, flame graph, per-thread drill-down.
-- 💾 **Heapdump analysis (optional)** — Parses GB-sized hprof files via Eclipse MAT. Ships with the bundled query-service plugin.
-- 🔌 **OpenAI-compatible LLM** — DeepSeek, OpenAI, Qwen, Kimi, and any compatible endpoint. Hot-reloadable UI config.
-- ⚡ **Real SSE streaming** — Tool calls, reasoning, and final answers push incrementally to the browser.
+- 💾 **Heapdump analysis (optional)** — Parses GB-sized hprof files via Eclipse MAT (requires JDK 21). Ships with the bundled query-service plugin.
+- 🔌 **OpenAI-compatible LLM** — DeepSeek, OpenAI, Qwen, Kimi, Ollama (local), and any compatible endpoint. Hot-reloadable UI config.
+- 🏠 **Ollama local inference** — Run entirely offline with no data leaving your machine. Zero-cost, no API key required.
 
 The community edition ships **without** billing, team management, or rate limits. For those, use a commercial offering.
+
+![JVMind CE Screenshot](frontend/public/image/chat_window.png)
 
 ---
 
@@ -41,7 +41,9 @@ jvmind
 
 ### Configure the LLM
 
-The UI prompts for an API key on first launch. To pre-configure via `.env`:
+The UI prompts for an API key on first launch. Two options:
+
+**Option A — Remote LLM provider (DeepSeek, OpenAI, etc.):**
 
 ```bash
 cp .env.example .env
@@ -51,7 +53,22 @@ OPENAI_BASE_URL=https://api.deepseek.com/v1
 OPENAI_MODEL=deepseek-chat
 ```
 
-The agent uses native OpenAI function-calling, so any model supporting `tools` works. DeepSeek's `deepseek-chat` is a sensible default.
+**Option B — Local Ollama (no API key, zero-cost, fully offline):**
+
+```bash
+# 1. Install & start Ollama: https://ollama.com
+# 2. Pull a model:
+ollama pull qwen2.5
+# 3. In the JVMind UI, click "Ollama · Local" preset in Settings (⚙️)
+#    or set in .env:
+OPENAI_BASE_URL=http://localhost:11434/v1
+OPENAI_MODEL=qwen2.5
+#    Leave OPENAI_API_KEY empty — Ollama doesn't need one.
+```
+
+The agent uses native OpenAI function-calling, so any model supporting `tools` works. DeepSeek's `deepseek-chat` is a sensible default for remote inference; `qwen2.5` or `llama3.1` are good choices for local Ollama.
+
+> **Privacy**: When using Ollama with a local model, no data ever leaves your machine — all GC logs, thread dumps, heap dumps, and conversation content stay local.
 
 ---
 
@@ -59,7 +76,7 @@ The agent uses native OpenAI function-calling, so any model supporting `tools` w
 
 ### GC log analysis
 
-Open the **📊 GC 分析** tab, upload a log file. The pipeline:
+Open the **📊 GC Logs** tab, upload a log file. The pipeline:
 
 1. Stream-upload → store raw text in DB
 2. Parser (pure regex) extracts events, computes statistics, builds overview
@@ -70,7 +87,7 @@ Supported collectors: **G1** · **Parallel** · **Serial** · **ZGC** · **Shena
 
 ### jstack thread analysis
 
-Open the **🧵 线程分析** tab, upload a `jstack -l` dump. Features:
+Open the **🧵 Thread Dumps** tab, upload a `jstack -l` dump. Features:
 
 - Thread state histogram (RUNNABLE / BLOCKED / WAITING / TIMED_WAITING)
 - Deadlock detection with lock chain visualization
@@ -78,9 +95,9 @@ Open the **🧵 线程分析** tab, upload a `jstack -l` dump. Features:
 - Thread pool distribution, flame graph, single-thread drill-down
 - Streamed LLM diagnosis (whole dump or single thread)
 
-### Heapdump analysis (optional — requires Eclipse MAT)
+### Heapdump analysis (optional — requires Eclipse MAT + JDK 21)
 
-The **🔍 Heapdump 分析** tab uploads GB-sized `.hprof` files. The architecture:
+The **🔍 Heap Dumps** tab uploads GB-sized `.hprof` files. The architecture:
 
 ```
   Browser ─▶ FastAPI (upload routes) ─▶ local disk: <dump_dir>/<report_id>/
@@ -104,7 +121,7 @@ The **🔍 Heapdump 分析** tab uploads GB-sized `.hprof` files. The architectu
 # or: MAT_HOME=/opt/mat ./scripts/install_mat.sh
 ```
 
-This downloads Eclipse MAT, extracts it, and copies the bundled `com.jvmind.mat.query-0.1.0.jar` into the MAT plugins directory. Configure and run:
+This downloads Eclipse MAT, extracts it, and copies the bundled `com.jvmind.mat.query-0.1.0.jar` into the MAT plugins directory. **Note: MAT requires JDK 21.** Configure and run:
 
 ```bash
 # .env
@@ -145,7 +162,7 @@ See [`.env.example`](./.env.example) for the full list. Key knobs:
 |----------|---------|---------|
 | `HOST` / `PORT` | `127.0.0.1` / `8000` | Bind address |
 | `DATABASE_URL` | `sqlite:///./data/app.db` | SQLAlchemy URL; switch to PostgreSQL for prod |
-| `OPENAI_API_KEY` | — | Required; user-level BYOK config also supported |
+| `OPENAI_API_KEY` | — | Required for remote providers; leave empty when using local Ollama |
 | `OPENAI_BASE_URL` | `https://api.deepseek.com/v1` | Any OpenAI-compatible endpoint |
 | `OPENAI_MODEL` | `deepseek-chat` | Model name |
 | `OPENAI_TIMEOUT_SECONDS` | `60` | Per-LLM-call timeout |

@@ -386,7 +386,7 @@ def main() -> int:
     banner("1. Register test user")
     suffix = str(int(time.time() * 1000))
     email = f"verify_pra+{suffix}@example.com"
-    password = "VerifyP@ss1234"
+    password = os.environ.get("VERIFY_PRA_PASSWORD", "VerifyP@ss1234")
     try:
         client.post_json("/api/auth/register", {"email": email, "password": password})
         print(f"[verify_pra] registered {email}")

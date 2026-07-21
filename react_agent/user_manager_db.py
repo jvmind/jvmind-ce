@@ -27,7 +27,7 @@ LOCAL_EMAIL = "local@jvmind.local"
 
 
 def _hash_password(password: str) -> str:
-    salt = "localuser$"  # 固定 salt，无登录场景不需要随机
+    salt = "localuser$"  # 仅本地单用户模式，无需登录验证，固定 salt 可接受
     dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), _HASH_ITERATIONS)
     return f"{salt}${base64.b64encode(dk).decode()}"
 

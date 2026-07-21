@@ -291,11 +291,16 @@ class LangGraphAgent(_LLMMixin):
         The client is built once and cached on ``self.client``.
         """
         if self.client is None:
-            if not self.api_key:
-                raise ValueError(
-                    "请先配置 API Key / Please configure API Key first"
-                )
-            self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+            api_key = self.api_key
+            is_local = self.base_url and any(h in self.base_url.lower() for h in ("localhost", "127.0.0.1"))
+            if not api_key:
+                if is_local:
+                    api_key = "noop"  # Ollama 本地不需要 API Key
+                else:
+                    raise ValueError(
+                        "请先配置 API Key / Please configure API Key first"
+                    )
+            self.client = OpenAI(api_key=api_key, base_url=self.base_url)
         return self.client
 
     def _llm_for_summary(self) -> Callable[[List[Dict[str, str]]], str]:

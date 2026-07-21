@@ -1,0 +1,34 @@
+# Source distribution manifest for jvmind-ce.
+
+# Frontend build artifacts — required by app/frontend.py to serve /,
+# /assets, /lib, /image. Ship pre-built dist/ when releasing.
+include frontend/dist/*
+include frontend/dist/**/*
+recursive-include frontend/dist *
+
+# i18n JSON files referenced by frontend at runtime
+include frontend/i18n/*.json
+
+# Frontend source — only needed for development (npm run dev), but
+# ship it so the source paths in index.html can still be served as a
+# fallback when no build is present.
+include frontend/index.html
+include frontend/report.html
+include frontend/src/*.js
+include frontend/src/*.css
+include frontend/src/css/*.css
+include frontend/src/test/*.js
+include frontend/src/gc-analysis/*
+include frontend/src/heapdump-analysis/*
+recursive-include frontend/src *
+
+# Bundled MAT query-service plugin (used by heapdump_worker)
+include vendor/mat/*.jar
+
+# Repository root files
+include LICENSE
+include README.md
+include README.zh-CN.md
+
+# Build tool scripts
+include scripts/install_mat.sh

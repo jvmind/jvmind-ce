@@ -53,7 +53,7 @@ dev = [
 ]
 
 [project.scripts]
-jvmind = "app.cli:main"
+jvmind = "server:main"
 jvmind-worker = "react_agent.heapdump_worker.__main__:main"
 
 [project.urls]
@@ -67,6 +67,10 @@ include = ["react_agent*", "app*"]
 
 [tool.setuptools.package-data]
 "app" = ["frontend/*", "frontend/**/*"]
+
+[tool.setuptools]
+include-package-data = true
+py-modules = ["server"]
 
 [tool.pytest.ini_options]
 testpaths = ["_tests"]
