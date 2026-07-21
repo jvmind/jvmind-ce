@@ -53,7 +53,7 @@ dev = [
 ]
 
 [project.scripts]
-jvmind = "server:main"
+jvmind = "app.cli:main"
 jvmind-worker = "react_agent.heapdump_worker.__main__:main"
 
 [project.urls]
