@@ -5,7 +5,6 @@ import threading
 from collections import OrderedDict
 from typing import Dict
 
-from react_agent.agent import ReActAgent
 from react_agent.db import init_db
 from react_agent.memory_db import DatabaseMemory
 from react_agent.user_manager_db import DatabaseUserManager
@@ -80,7 +79,7 @@ _AGENTS_MAX = int(os.getenv("AGENT_CACHE_MAX", "500"))
 _SESSION_LOCKS_MAX = int(os.getenv("SESSION_LOCK_CACHE_MAX", "2000"))
 
 _USER_MANAGER = None
-_AGENTS: Dict[str, ReActAgent] = _LRUDict(_AGENTS_MAX)
+_AGENTS: Dict[str, object] = _LRUDict(_AGENTS_MAX)
 _AGENTS_LOCK = threading.Lock()
 _SESSION_LOCKS: Dict[str, threading.Lock] = {}
 _SESSION_LOCKS_GUARD = threading.Lock()

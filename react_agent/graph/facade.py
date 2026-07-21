@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
 from langchain_core.messages import BaseMessage
 from openai import OpenAI
 
-from ..agent.llm import _LLMMixin
+from .llm_compat import _LLMMixin
 from .graph_builder import build_graph
 from .llm import build_llm
 from .sse_adapter import SSEAdapter
@@ -267,19 +267,11 @@ class LangGraphAgent(_LLMMixin):
         return msgs
 
     def _legacy_stream(self, session_id, user_input, llm_input, lang, should_stop=None):
-        from ..agent import ReActAgent as LegacyAgent
-        legacy = LegacyAgent(
-            api_key=self.api_key,
-            base_url=self.base_url,
-            model=self.model,
-            temperature=self.temperature,
-            max_iterations=self.max_iterations,
-            system_prompt_template=self.system_prompt_template,
-            system_prompt_extra=self.system_prompt_extra,
-            memory=self.memory,
+        """社区版无 ReAct 后备路径：直接报错。"""
+        raise RuntimeError(
+            "Legacy ReAct fallback is not available in JVMind CE; "
+            "configure an OpenAI-compatible provider that supports tools.",
         )
-        legacy._fc_unsupported = self._fc_unsupported
-        yield from legacy.run_stream(session_id, user_input, llm_input=llm_input, lang=lang, should_stop=should_stop)
 
     @staticmethod
     def _is_tools_unsupported_error(msg: str) -> bool:

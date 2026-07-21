@@ -13,7 +13,7 @@ from langchain_core.messages import (
 )
 from langgraph.prebuilt import ToolNode
 
-from ..agent.parsing import _ParsingMixin
+from .parsing_compat import _ParsingMixin
 from .state import MAX_HISTORY_MESSAGES
 
 # P0-3 fix (2026-07-09): 移除 _set_session_id 调用 — thread-local 在 LangGraph

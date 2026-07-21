@@ -242,7 +242,7 @@ def get_builtin_config() -> dict:
     return {"openai_api_key": api_key, "openai_base_url": base_url, "openai_model": model}
 
 
-def _get_agent(user_id: str) -> ReActAgent:
+def _get_agent(user_id: str):
     if user_id not in state._AGENTS:
         with state._AGENTS_LOCK:
             if user_id in state._AGENTS:
@@ -280,13 +280,8 @@ def _get_agent(user_id: str) -> ReActAgent:
                 max_iterations=int(cfg.get("max_iterations", 10)),
             )
 
-            use_langgraph = os.getenv("USE_LANGGRAPH_AGENT", "0") == "1"
-            if use_langgraph:
-                from react_agent.graph.facade import LangGraphAgent
-                agent = LangGraphAgent(**common_kwargs)
-            else:
-                from react_agent.agent import ReActAgent as _RA
-                agent = _RA(**common_kwargs)
+            from react_agent.graph.facade import LangGraphAgent
+            agent = LangGraphAgent(**common_kwargs)
             sm = state.SkillMgrImpl(user_id)
             skills = sm.list()
             agent.load_skills(skills)
