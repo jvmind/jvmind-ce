@@ -29,7 +29,7 @@ def get_config(request: Request):
     if result["use_built_in"]:
         builtin = helpers.get_builtin_config()
         result["openai_base_url"] = builtin["openai_base_url"]
-        result["openai_model"] = builtin["openai_model"] or "内置模型"
+        result["openai_model"] = builtin["openai_model"] or ""
         result["openai_api_key"] = ""
         result["openai_api_key_set"] = bool(builtin["openai_api_key"])
         result["note"] = "当前使用内置模型 / Currently using built-in model"

@@ -82,11 +82,16 @@ setOnSaved(async (data) => {
     badge.onclick = null;
     badge.style.cursor = "";
     if (model) {
-      const fromUrl = cfg.openai_base_url ? new URL(cfg.openai_base_url).hostname.replace(/^api\.|\.com$/g, "") : "";
-      badge.title = cfg.openai_base_url || "";
-      badge.innerHTML = fromUrl ? `<span class="provider">${escapeHtml(fromUrl)}</span> · ${escapeHtml(model)}` : escapeHtml(model);
+      if (cfg.use_built_in && !!cfg.note) {
+        badge.title = cfg.openai_base_url || "";
+        badge.innerHTML = `<span class="provider">内置 · ${escapeHtml(model)}</span>`;
+      } else {
+        const fromUrl = cfg.openai_base_url ? new URL(cfg.openai_base_url).hostname.replace(/^api\.|\.com$/g, "") : "";
+        badge.title = cfg.openai_base_url || "";
+        badge.innerHTML = fromUrl ? `<span class="provider">${escapeHtml(fromUrl)}</span> · ${escapeHtml(model)}` : escapeHtml(model);
+      }
     } else {
-      badge.innerHTML = `<span style="color:var(--text-dim);font-size:12px;">⚙️ ${t("config.no_model")}</span>`;
+      badge.innerHTML = `<span style="color:var(--text-dim);font-size:12px;">⚙️ ${t("config.no_model2")}</span>`;
       badge.onclick = () => document.getElementById("sbConfigBtn")?.click();
       badge.style.cursor = "pointer";
     }
@@ -139,19 +144,20 @@ async function initApp() {
   try {
     const cfg = await api("/api/config");
     const model = cfg.openai_model || "";
-    const hasBuiltIn = cfg.use_built_in && !!cfg.note;
     state.llmConfigured = !cfg.use_built_in && !!cfg.openai_base_url && !!model;
     const badge = document.getElementById("modelLabel");
     if (badge) {
-      if (hasBuiltIn && model) {
-        badge.title = cfg.openai_base_url || "";
-        badge.innerHTML = `<span class="provider">内置 · ${escapeHtml(model)}</span>`;
-      } else if (model) {
-        const fromUrl = cfg.openai_base_url ? new URL(cfg.openai_base_url).hostname.replace(/^api\.|\.com$/g, "") : "";
-        badge.title = cfg.openai_base_url || "";
-        badge.innerHTML = fromUrl ? `<span class="provider">${escapeHtml(fromUrl)}</span> · ${escapeHtml(model)}` : escapeHtml(model);
+      if (model) {
+        if (cfg.use_built_in && !!cfg.note) {
+          badge.title = cfg.openai_base_url || "";
+          badge.innerHTML = `<span class="provider">内置 · ${escapeHtml(model)}</span>`;
+        } else {
+          const fromUrl = cfg.openai_base_url ? new URL(cfg.openai_base_url).hostname.replace(/^api\.|\.com$/g, "") : "";
+          badge.title = cfg.openai_base_url || "";
+          badge.innerHTML = fromUrl ? `<span class="provider">${escapeHtml(fromUrl)}</span> · ${escapeHtml(model)}` : escapeHtml(model);
+        }
       } else {
-        badge.innerHTML = `<span style="color:var(--text-dim);font-size:12px;">⚙️ ${t("config.no_model")}</span>`;
+        badge.innerHTML = `<span style="color:var(--text-dim);font-size:12px;">⚙️ ${t("config.no_model2")}</span>`;
         badge.onclick = () => document.getElementById("sbConfigBtn")?.click();
         badge.style.cursor = "pointer";
       }

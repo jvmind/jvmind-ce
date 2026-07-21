@@ -43,8 +43,8 @@ def mount_frontend(app: FastAPI) -> None:
     if (_fe / "assets").exists():
         # Production build: assets under /assets, libs under /lib, images under /image
         app.mount("/assets", StaticFiles(directory=_fe / "assets"), name="assets")
-        # Mount /src for CSS (style.css, served from project root frontend/src/)
-        src_dir = _fe.parent.parent.parent / "frontend" / "src"
+        # Mount /src for CSS (style.css, bundled in dist/src/)
+        src_dir = _fe / "src"
         if src_dir.exists():
             app.mount("/src", StaticFiles(directory=src_dir), name="src")
         lib_dir = _fe / "lib"
