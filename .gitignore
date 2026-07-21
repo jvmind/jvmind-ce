@@ -49,5 +49,6 @@ backups/
 # Build artifacts
 build/
 dist/
+app/frontend/
 *.egg-info/
 *.whl
