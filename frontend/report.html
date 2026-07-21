@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title data-i18n="report.title">JVMind Report</title>
+<link rel="icon" href="/image/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="/image/favicon-96x96.png" sizes="96x96">
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.10/dist/purify.min.js"></script>
+<link rel="stylesheet" href="/src/style.css">
+</head>
+<body class="report-only">
+
+<!-- Dummy elements for gc-analysis.js / jstack-analysis.js side effects -->
+<div id="analysisFab" style="display:none;"></div>
+<button id="gcClose" style="display:none;"></button>
+<div id="uploadZone" style="display:none;"></div>
+<input type="file" id="gcFile" style="display:none;" />
+<div id="jstackUploadZone" style="display:none;"></div>
+<input type="file" id="jstackFile" style="display:none;" />
+
+<!-- Report panel -->
+<div id="gcPanel" class="gc-panel open">
+  <div class="mode-body" data-mode="gc">
+    <div class="gc-body" id="gcBodyCurrent">
+      <div id="gcReportArea" style="display:none;"></div>
+      <div id="gcLoading" style="display:none;text-align:center;padding:30px;color:var(--text-dim);" data-i18n="report.loading">Loading...</div>
+      <div id="gcError" style="display:none;color:var(--red);padding:20px;text-align:center;"></div>
+    </div>
+  </div>
+  <div class="mode-body" data-mode="jstack" style="display:none">
+    <div class="gc-body" id="jstackBodyCurrent">
+      <div id="jstackReportArea" style="display:none;"></div>
+      <div id="jstackLoading" style="display:none;text-align:center;padding:30px;color:var(--text-dim);" data-i18n="report.loading">Loading...</div>
+      <div id="jstackError" style="display:none;color:var(--red);padding:20px;text-align:center;"></div>
+    </div>
+  </div>
+  <div class="mode-body" data-mode="heapdump" style="display:none">
+    <div class="gc-body" id="heapdumpBodyCurrent">
+      <div id="heapdumpReportArea" style="display:none;"></div>
+      <div id="heapdumpLoading" style="display:none;text-align:center;padding:30px;color:var(--text-dim);" data-i18n="report.loading">Loading...</div>
+      <div id="heapdumpError" style="display:none;color:var(--red);padding:20px;text-align:center;"></div>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="/src/report.js"></script>
+</body>
+</html>

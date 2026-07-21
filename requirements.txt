@@ -1,0 +1,20 @@
+# ===== JVMind Community Edition =====
+# 本文件是社区版运行依赖；删除 Paddle / Posthog（已不再使用）。
+openai>=1.30.0
+python-dotenv>=1.0.0
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+sse-starlette>=2.0.0
+python-multipart>=0.0.9
+sqlalchemy>=2.0
+aiosqlite>=0.20
+psycopg[binary]>=3.3.4
+pydantic>=2.0
+starlette>=0.27.0
+markdown>=3.0
+langgraph>=0.2,<1.0
+langchain-core>=0.3,<0.4
+langchain-openai>=0.3,<1.0
+tiktoken>=0.7,<1.0
+
+# 可选：heapdump 分析需要 MAT 外部工具（见 README），无需额外 Python 依赖。

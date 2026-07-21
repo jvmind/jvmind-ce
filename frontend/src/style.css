@@ -1,0 +1,10 @@
+﻿@import "./css/base.css";
+@import "./css/sidebar.css";
+@import "./css/topbar.css";
+@import "./css/messages.css";
+@import "./css/input.css";
+@import "./css/modals.css";
+@import "./css/gc-panel.css";
+@import "./css/reports.css";
+@import "./css/flamegraph.css";
+@import "./css/heapdump.css";

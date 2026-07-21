@@ -1,0 +1,53 @@
+﻿  /* ---------- Flame Graph ---------- */
+  .flamegraph-wrap {
+    background: var(--bg-3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    margin-top: 6px;
+  }
+  .flamegraph-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    gap: 8px;
+    font-size: 12px;
+  }
+  .flamegraph-toolbar button {
+    background: rgba(28,34,43,0.85);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    border-radius: 4px;
+    padding: 2px 7px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .flamegraph-toolbar button:hover { color: var(--text); border-color: var(--primary); }
+  .flamegraph-container {
+    position: relative;
+    overflow: auto;
+    background: var(--code-bg);
+    border-radius: 4px;
+    min-height: 60px;
+    max-height: 480px;
+  }
+  .flame-frame {
+    position: absolute;
+    box-sizing: border-box;
+    border: 1px solid rgba(0,0,0,0.25);
+    font-size: 10px;
+    line-height: 22px;
+    padding: 0 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: default;
+    border-radius: 2px;
+    transition: opacity 0.1s;
+  }
+  .flame-frame:hover {
+    border-color: rgba(255,255,255,0.6);
+    opacity: 0.9;
+    z-index: 2;
+  }

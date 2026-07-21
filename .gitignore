@@ -1,0 +1,47 @@
+.env
+config.json
+sessions/
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+data/
+*.db
+.idea/
+frontend/node_modules/
+frontend/dist/
+node_modules/
+.superpowers/
+web_mat_project
+
+# Test artifacts
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+frontend/coverage/
+
+# Load test output
+reports/
+
+# Scratch / debug files
+debug_*
+_check_*
+_verify_*
+_parse_*
+_debug_*
+verify_*
+test_debug*
+test_shenandoah*
+
+# Localhost SSL certs (DO NOT COMMIT)
+localhost*.pem
+.omo/
+
+# OpenCode / opencode tooling artifacts
+.agents/
+skills-lock.json
+
+# Data backups (DO NOT COMMIT — may contain encrypted user data)
+backups/
+.cortexkit/

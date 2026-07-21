@@ -1,0 +1,23 @@
+[run]
+branch = False
+source =
+    app
+    react_agent
+omit =
+    */__init__.py
+    */tests/*
+    */_tests/*
+
+[report]
+exclude_lines =
+    pragma: no cover
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+    \.\.\.
+show_missing = True
+skip_covered = True
+precision = 1
+
+[xml]
+output = coverage.xml

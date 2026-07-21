@@ -1,0 +1,245 @@
+﻿  /* ---------- 闁板秶鐤嗙€电鐦藉?---------- */
+  .modal-mask {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.55);
+    z-index: 200;
+    display: none;
+    justify-content: center; align-items: center;
+  }
+  .modal-mask.open { display: flex; }
+  .modal {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    width: 540px;
+    max-width: 92vw;
+    max-height: 88vh;
+    overflow: hidden;
+    display: flex; flex-direction: column;
+    box-shadow: var(--shadow-xl);
+    transform: scale(0.95);
+    opacity: 0;
+    animation: modalFadeIn 0.25s ease forwards;
+  }
+  @keyframes modalFadeIn {
+    to {
+      transform: scale(1);
+      opacity: 1;
+    }
+  }
+  .modal-header {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+    background: var(--bg-3);
+  }
+  #loginMask .modal {
+    position: relative;
+  }
+  #loginMask .modal-header {
+    justify-content: center;
+    padding: 20px 18px 14px;
+    background: var(--bg-2);
+  }
+  .modal-close {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    z-index: 1;
+  }
+  .modal-close:hover {
+    background: var(--bg-3);
+    color: var(--text);
+  }
+  #loginMask .logo-link {
+    display: block;
+    text-decoration: none;
+  }
+  #loginMask .logo-link:hover .logo {
+    opacity: 0.85;
+  }
+  .modal-header h2 { margin: 0; font-size: 15px; font-weight: 600; }
+  .modal-body {
+    padding: 16px 18px;
+    overflow-y: auto;
+    flex: 1;
+  }
+  .modal-footer {
+    padding: 12px 18px;
+    border-top: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+    background: var(--bg-2);
+  }
+  #loginMask .modal-footer {
+    gap: 8px;
+    align-items: stretch;
+  }
+  #loginMask .auth-link-btn {
+    font-size: 12px;
+    color: var(--primary);
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px 0;
+  }
+  #loginMask .auth-link-btn:hover {
+    text-decoration: underline;
+  }
+  .billing-modal { width: 720px; }
+  .billing-body { display: flex; flex-direction: column; gap: 14px; }
+  .billing-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--bg-3);
+    padding: 14px;
+  }
+  .billing-card h3 { margin: 0 0 10px; font-size: 14px; }
+  .billing-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; }
+  .billing-kv { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; }
+  .billing-kv span:first-child { color: var(--text-dim); }
+  .billing-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .billing-plan-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items: center; padding: 8px 0; border-top: 1px solid var(--border); font-size: 13px; }
+  .billing-plan-row:first-child { border-top: none; }
+  .billing-invoice-row { display: grid; grid-template-columns: 1.2fr 1fr 1fr auto; gap: 8px; align-items: center; padding: 9px 0; border-top: 1px solid var(--border); font-size: 12px; }
+  .billing-invoice-row:first-child { border-top: none; }
+  .billing-status { padding: 2px 6px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-dim); }
+  .billing-status.paid, .billing-status.active { color: var(--green); border-color: var(--green); }
+  .billing-status.failed, .billing-status.cancelled { color: var(--red); border-color: var(--red); }
+  .billing-error { color: var(--red); font-size: 12px; }
+  .billing-toggle { display: flex; gap: 8px; }
+  .billing-toggle button { padding: 5px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-2); color: var(--text); font-size: 13px; cursor: pointer; transition: all 0.15s; }
+  .billing-toggle button.active { background: var(--primary); color: #fff; border-color: transparent; }
+  .billing-toggle button:hover:not(.active) { border-color: var(--primary); }
+
+  .form-row {
+    margin-bottom: 14px;
+  }
+  .form-row label {
+    display: block;
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+  }
+  .form-row input, .form-row textarea, .form-row select {
+    width: 100%;
+    background: var(--bg-3);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+  }
+  .form-row input:focus, .form-row textarea:focus, .form-row select:focus {
+    border-color: var(--primary);
+  }
+  .form-row textarea { resize: vertical; min-height: 60px; }
+  .form-row .hint {
+    color: var(--text-dim);
+    font-size: 11px;
+    margin-top: 4px;
+  }
+  .form-row.config-mode-row {
+    background: var(--bg-3);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+  }
+  .form-row label.config-mode-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text);
+    margin-bottom: 8px;
+    cursor: pointer;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .form-row label.config-mode-option:last-of-type {
+    margin-bottom: 4px;
+  }
+  .form-row label.config-mode-option input {
+    width: auto;
+    flex: 0 0 auto;
+    margin: 0;
+    padding: 0;
+    accent-color: var(--primary);
+  }
+  .form-grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .preset-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+  .preset-chip {
+    background: var(--bg-3);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .preset-chip:hover { border-color: var(--primary); color: var(--primary); }
+  .test-result {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+  }
+.test-result.ok { background: var(--test-ok-bg); border: 1px solid var(--test-ok-border); color: var(--green); }
+.test-result.err { background: var(--test-err-bg); border: 1px solid var(--test-err-border); color: var(--red); }
+
+  /* ---------- 图表放大浮层 (chart-zoom) ---------- */
+  .chart-zoom-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.7);
+    z-index: 250;
+    display: flex; justify-content: center; align-items: center;
+    animation: chartZoomFadeIn 0.2s ease;
+  }
+  @keyframes chartZoomFadeIn { from { opacity: 0; } to { opacity: 1; } }
+  .chart-zoom-container {
+    width: 90vw; height: 85vh; max-width: 1500px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    display: flex; flex-direction: column;
+    box-shadow: var(--shadow-xl);
+    overflow: hidden;
+  }
+  .chart-zoom-header {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+    background: var(--bg-3);
+  }
+  .chart-zoom-title { font-weight: 600; font-size: 14px; color: var(--text); }
+  .chart-zoom-close {
+    background: transparent; border: none;
+    color: var(--text-dim); font-size: 22px; cursor: pointer;
+    width: 32px; height: 32px; border-radius: 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .chart-zoom-close:hover { background: var(--bg-3); color: var(--text); }
+  .chart-zoom-body { flex: 1; padding: 12px; min-height: 0; }

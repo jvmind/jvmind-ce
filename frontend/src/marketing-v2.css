@@ -1,0 +1,771 @@
+/* ============================================================
+   marketing-v2.css — 对比版 (v2)
+
+   与 marketing.css 的差异仅在视觉（调色、字体、Hero 的签名元素），
+   全部 section 结构、layout 网格、copy 文案数量级与原版保持一致，
+   以保证 A/B 对比的纯粹性。
+
+   v2.2 迭代（2026-07-10）：
+     violet 太刺眼 → 收敛成两个色级：
+       --violet       #8b5cf6   仅用于 finding 行 / primary 按钮 等
+                                真正需要"finding"语义的高光
+       --violet-soft  #a78bfa   用于文字/边线等所有次级 accent
+     —— 让 violet 落在 logo "ind" 字的真实色域里，不再像高饱和色
+     警报。删除 dot 上的 box-shadow pulse glow，避免页面"在闪"。
+     Logo 高度从 36px 放大到 56px，恢复视觉重量。
+
+   v2.1 迭代：
+     签名色从 amber 改为 violet（amber 太"工业告警"且与 logo 撞色）。
+
+   与原版的 5 个不同：
+   1. 调色板：instrument-black + violet "finding"签名色（品牌色域内）
+   2. 字体：IBM Plex Sans + Plex Mono（替换系统栈）
+   3. Hero：GC pause timeline SVG + 真实 log 行文（替换 pill + 渐变标题）
+   4. 图标：inline SVG 24×24 1.5px 描边（替换 emoji）
+   5. CTA band：深色 + brand-gradient hairline + outlined 按钮（替换蓝→靛渐变）
+   ============================================================ */
+
+@import "./css/base.css";
+
+/* ---------- 字体：IBM Plex Sans + Mono (Google Fonts) ---------- */
+/* 已经在 <head> 里 link，这里仅声明 fallback 与覆盖 base.css 的字体 */
+:root {
+  --font-sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
+               "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "JetBrains Mono", "SF Mono", Menlo, Consolas,
+               "Liberation Mono", monospace;
+}
+
+/* ---------- 调色板覆盖：instrument-black + violet finding (logo 颜色域) ---------- */
+:root {
+  /* 主背景：更冷、更黑，给"仪器面板"感 */
+  --bg:      #0b0d10;
+  --bg-2:    #14171c;
+  --bg-3:    #1a1f26;
+  /* 边线：hairline 化，从 #2a313c 收紧到 #22262e */
+  --border:  #22262e;
+  --border-accent: #3a3a44;
+  /* 文字保持，仅 dim 微调 */
+  --text:    #e6edf3;
+  --text-dim:#7d858f;
+  /* 品牌色：与 logo 对齐（logo 是 blue→violet 渐变） */
+  --primary:    #3b82f6;     /* logo "JVM" 蓝，比 v1 #2f81f7 更饱和 */
+  --primary-2:  #2563eb;
+  --violet:     #8b5cf6;     /* logo "ind" 紫——emphasis 专用 */
+  --violet-soft: #a78bfa;    /* 弱化版，绝大多数 accent 场景用这个 */
+  --violet-dim: #6d28d9;     /* hover/active 加深 */
+  --violet-bg:  rgba(139, 92, 246, 0.05);
+  --violet-line: rgba(139, 92, 246, 0.15);
+  /* 品牌渐变 = logo 渐变的复刻，唯一被允许饱和的地方 */
+  --brand-gradient: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+  /* 状态色 */
+  --green:  #3fb950;
+  --orange: #d29922;
+  --red:    #f85149;
+}
+
+/* 营销页为正常滚动文档，强制覆盖 base.css 的 flex 锁定布局 */
+html { height: auto !important; overflow-x: clip !important; overflow-y: visible !important; }
+body {
+  height: auto !important; min-height: 100% !important; display: block !important;
+  overflow-x: clip !important; overflow-y: visible !important;
+  background: var(--bg);
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01", "cv01", "cv11";
+  /* 微微加字距，让 Plex Sans 的字符更舒展 */
+  letter-spacing: -0.005em;
+  /* 用细微噪点 + 极淡 vignette 模拟仪器面板——比 radial gradient "更安静" */
+  background-image:
+    radial-gradient(120% 80% at 50% 0%, rgba(47, 129, 247, 0.05) 0%, transparent 50%),
+    linear-gradient(180deg, var(--bg) 0%, #07090c 100%);
+  background-attachment: fixed;
+}
+
+/* ---------- 全局 mono 工具类 ---------- */
+.mono {
+  font-family: var(--font-mono);
+  font-feature-settings: "ss02", "zero", "tnum";
+}
+
+/* ============================================================
+   按钮系统（替换原版的渐变叠层 + box-shadow-glow）
+   ============================================================ */
+.btn {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;            /* 收紧 — 原版是 10px，v2 用 4px 的"仪器按钮"感 */
+  padding: 9px 16px;
+  cursor: pointer;
+  font-size: 13.5px;
+  font-weight: 500;
+  font-family: var(--font-sans);
+  transition: border-color 0.15s, background-color 0.15s, color 0.15s;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-decoration: none;
+}
+.btn:hover {
+  border-color: var(--border-accent);
+  background: rgba(255, 255, 255, 0.02);
+}
+.btn:active { background: rgba(255, 255, 255, 0.04); }
+/* primary：violet 填充 + 深色字，与 logo "ind" 同色 */
+.btn.primary {
+  background: var(--violet);
+  color: #1a0f2e;
+  border-color: var(--violet);
+  font-weight: 600;
+}
+.btn.primary:hover {
+  background: var(--violet-soft);
+  border-color: var(--violet-soft);
+}
+.btn.ghost {
+  color: var(--text-dim);
+  border-color: transparent;
+}
+.btn.ghost:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+.btn.full { width: 100%; }
+.btn:disabled, .btn.disabled {
+  opacity: 0.4; cursor: not-allowed; pointer-events: none;
+}
+
+/* ---------- 容器 ---------- */
+.lp { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+
+/* ============================================================
+   Site nav
+   ============================================================ */
+.site-nav {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 0; position: sticky; top: 0; z-index: 50;
+  background: rgba(11, 13, 16, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+.site-nav .inner {
+  max-width: 1120px; margin: 0 auto; padding: 0 24px; width: 100%;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.site-nav .brand {
+  display: flex; align-items: center; gap: 14px;
+  text-decoration: none; color: var(--text);
+}
+.site-nav .brand img { height: 56px; }
+.site-nav .brand-meta {
+  display: flex; flex-direction: column; gap: 2px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.25;
+}
+.site-nav .brand-meta .name {
+  color: var(--text);
+  font-weight: 600;
+  font-size: 15px;
+  font-family: var(--font-sans);
+  letter-spacing: -0.01em;
+  margin-bottom: 1px;
+}
+.site-nav .links { display: flex; align-items: center; gap: 24px; }
+.site-nav .links a {
+  color: var(--text-dim); text-decoration: none;
+  font-size: 13.5px; transition: color .15s;
+}
+.site-nav .links a:hover { color: var(--text); }
+.site-nav .links a.compare {
+  color: var(--violet-soft);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+}
+.site-nav .links a.btn { color: #1a1206; }
+
+/* ============================================================
+   Hero — GC pause readout (signature element)
+   ============================================================ */
+.hero {
+  padding: 56px 0 64px;
+  text-align: left;
+  position: relative;
+  max-width: 1120px;
+  margin: 0 auto;
+}
+.hero-grid {
+  display: grid;
+  grid-template-columns: 1.05fr 1fr;
+  gap: 56px;
+  align-items: center;
+}
+@media (max-width: 960px) {
+  .hero-grid { grid-template-columns: 1fr; gap: 40px; }
+}
+.hero-text .eyebrow-mono {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--violet-soft);
+  letter-spacing: 0.04em;
+  margin-bottom: 20px;
+  padding: 4px 10px;
+  border: 1px solid var(--violet-line);
+  border-radius: 2px;
+  background: var(--violet-bg);
+}
+.hero-text h1 {
+  font-size: clamp(32px, 4.4vw, 50px);
+  line-height: 1.05;
+  margin: 0 0 22px;
+  letter-spacing: -0.025em;
+  font-weight: 600;
+}
+.hero-text h1 .violet {
+  background: var(--brand-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+.hero-text .sub {
+  font-size: 16.5px;
+  color: var(--text-dim);
+  max-width: 520px;
+  margin: 0 0 32px;
+  line-height: 1.55;
+}
+.hero-text .cta-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
+.hero-text .note {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
+}
+.hero-text .note .sep { color: var(--border-accent); margin: 0 8px; }
+
+/* ---------- The signature: GC pause readout ---------- */
+.readout {
+  background: #0e1116;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.7;
+  overflow: hidden;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.02),
+    0 20px 60px -20px rgba(0, 0, 0, 0.8);
+}
+.readout-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px;
+  background: #14171c;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.readout-head .dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--green);
+  animation: pulse 2s ease-in-out infinite;
+}
+.readout-head .label { font-weight: 500; color: var(--text); letter-spacing: 0.02em; }
+.readout-head .ts { margin-left: auto; }
+.readout-body { padding: 14px 16px 10px; }
+.readout-body .line {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 12px;
+  padding: 3px 0;
+  align-items: baseline;
+}
+.readout-body .line .ts { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.readout-body .line .event { color: var(--text); }
+.readout-body .line .event .key { color: #8b96a5; }
+.readout-body .line .event .v { color: var(--text); }
+.readout-body .line .event .dur { color: var(--text); font-variant-numeric: tabular-nums; }
+.readout-body .line .bars {
+  display: inline-block;
+  color: var(--violet);
+  letter-spacing: -1px;
+  font-family: var(--font-mono);
+  vertical-align: baseline;
+}
+.readout-body .line.finding {
+  background: var(--violet-bg);
+  border-left: 2px solid var(--violet);
+  margin: 4px -16px;
+  padding: 4px 14px;
+}
+.readout-body .line.finding .ts { color: var(--violet); }
+.readout-body .line.finding .event { color: var(--text); }
+.readout-body .line.finding strong { color: var(--violet); font-weight: 600; }
+.readout-foot {
+  border-top: 1px solid var(--border);
+  padding: 12px 16px;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  background: #14171c;
+  font-size: 12px;
+}
+.readout-foot .dot.violet {
+  background: var(--violet);
+  width: 7px; height: 7px; border-radius: 50%;
+  margin-top: 5px; flex-shrink: 0;
+}
+.readout-foot .diagnosis { color: var(--text); line-height: 1.55; }
+.readout-foot .diagnosis .label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--violet);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-right: 6px;
+}
+.readout-foot .diagnosis code {
+  font-family: var(--font-mono);
+  background: var(--bg-3);
+  padding: 1px 5px;
+  border-radius: 2px;
+  font-size: 11.5px;
+  color: var(--violet);
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ============================================================
+   Sections
+   ============================================================ */
+.section { padding: 64px 0; }
+.section.alt { background: #0e1116; border-block: 1px solid var(--border); }
+.section-head { margin-bottom: 40px; }
+.section-head .eyebrow {
+  font-family: var(--font-mono);
+  color: var(--violet-soft);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 12px;
+}
+.section-head h2 {
+  font-size: clamp(24px, 3vw, 32px);
+  margin: 0 0 12px;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+  max-width: 640px;
+}
+.section-head p {
+  color: var(--text-dim);
+  max-width: 580px;
+  margin: 0;
+  font-size: 14.5px;
+  line-height: 1.6;
+}
+
+/* ============================================================
+   Cards — replace emoji .ico with inline SVG
+   ============================================================ */
+.cards-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; }
+.card {
+  background: var(--bg-2);
+  padding: 24px;
+  transition: background 0.15s;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.card:hover {
+  background: #181c22;
+  border-color: var(--violet-line);
+}
+.card .ico {
+  width: 32px; height: 32px;
+  color: var(--violet-soft);
+  margin-bottom: 18px;
+  display: flex; align-items: center; justify-content: center;
+}
+.card .ico svg { width: 24px; height: 24px; stroke: currentColor; fill: none; stroke-width: 1.5; }
+.card h3 {
+  margin: 0 0 10px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.card h3 code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  background: var(--bg-3);
+  padding: 1px 5px;
+  border-radius: 2px;
+  color: var(--text);
+}
+.card p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.card p code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-3);
+  padding: 1px 4px;
+  border-radius: 2px;
+  color: var(--text);
+}
+.card.featured {
+  border-color: var(--violet-line);
+  background: linear-gradient(180deg, rgba(139, 92, 246, 0.03) 0%, transparent 50%), var(--bg-2);
+}
+.card.featured::before {
+  content: 'recommended';
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--violet-soft);
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border: 1px solid var(--violet-line);
+  border-radius: 2px;
+  margin-bottom: 12px;
+}
+
+/* ============================================================
+   Steps — keep numbered markers but render as Plex Mono tabular
+   (skill: "only use if content IS a sequence")
+   ============================================================ */
+.steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; }
+.step {
+  background: var(--bg-2);
+  padding: 28px 24px 24px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  position: relative;
+}
+.step .num {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--violet-soft);
+  letter-spacing: -0.02em;
+  margin-bottom: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.step .num::after {
+  content: '';
+  display: block;
+  width: 24px;
+  height: 1px;
+  background: var(--violet-soft);
+  margin: 8px 0 14px;
+}
+.step h3 {
+  margin: 0 0 8px;
+  font-size: 15.5px;
+  font-weight: 600;
+}
+.step p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.step p code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  background: var(--bg-3);
+  padding: 1px 4px;
+  border-radius: 2px;
+  color: var(--text);
+}
+
+/* ============================================================
+   Feat grid
+   ============================================================ */
+.feat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; }
+.feat {
+  display: flex; gap: 14px; padding: 16px;
+  border: 1px solid var(--border); border-radius: 4px; background: var(--bg-2);
+}
+.feat .ico {
+  width: 28px; height: 28px;
+  color: var(--violet-soft);
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.feat .ico svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.5; }
+.feat .t { font-size: 13.5px; font-weight: 600; margin-bottom: 2px; }
+.feat .d { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+.feat .d code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  background: var(--bg-3);
+  padding: 1px 4px;
+  border-radius: 2px;
+  color: var(--text);
+}
+
+/* ============================================================
+   Pricing
+   ============================================================ */
+.pricing-teaser .cards-3 { gap: 1px; }
+.pricing-teaser .plan-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--violet-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 12px;
+}
+.pricing-teaser .plan-price {
+  font-size: 32px;
+  font-weight: 700;
+  margin-bottom: 4px;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.pricing-teaser .plan-price small {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-weight: 400;
+  margin-left: 4px;
+}
+.pricing-teaser .plan-tag {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--violet-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.pricing-teaser .plan-desc {
+  color: var(--text-dim);
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+.pricing-teaser .plan-feats {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 18px;
+  flex: 1;
+}
+.pricing-teaser .plan-feats li {
+  font-size: 12.5px;
+  padding: 6px 0;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  display: flex; gap: 8px; align-items: baseline;
+}
+.pricing-teaser .plan-feats li::before {
+  content: '·';
+  color: var(--violet-soft);
+  font-weight: 700;
+}
+.pricing-teaser .plan-feats li .v {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+/* ============================================================
+   FAQ
+   ============================================================ */
+.faq { max-width: 760px; }
+.faq details {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-2);
+  margin-bottom: 1px;
+}
+.faq summary {
+  padding: 16px 18px;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 14px;
+  list-style: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  transition: color 0.15s;
+}
+.faq summary:hover { color: var(--violet-soft); }
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary::after {
+  content: '+';
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  font-size: 16px;
+}
+.faq details[open] summary::after { content: '−'; }
+.faq .ans {
+  padding: 0 18px 16px;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.faq .ans code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-3);
+  padding: 1px 5px;
+  border-radius: 2px;
+  color: var(--text);
+}
+.faq .ans a { color: var(--violet-soft); }
+
+/* ============================================================
+   CTA band — replace blue→indigo gradient with stark dark + brand-gradient rule
+   ============================================================ */
+.cta-band {
+  position: relative;
+  text-align: left;
+  padding: 56px 56px;
+  margin: 32px 0 0;
+  background: #0e1116;
+  border: 1px solid var(--violet-line);
+  border-radius: 6px;
+}
+.cta-band::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(80% 100% at 100% 0%, var(--violet-bg) 0%, transparent 60%);
+  pointer-events: none;
+  border-radius: 6px;
+}
+/* The signature gradient bar: a 2px line at the top that re-states the
+   logo's blue→violet gradient as a single, restrained accent. */
+.cta-band::after {
+  content: '';
+  position: absolute;
+  top: -1px; left: -1px; right: -1px;
+  height: 2px;
+  background: var(--brand-gradient);
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+}
+.cta-band-inner {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 32px;
+  flex-wrap: wrap;
+}
+.cta-band-text .eyebrow-mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--violet-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 10px;
+}
+.cta-band-text h2 {
+  font-size: clamp(22px, 2.5vw, 28px);
+  margin: 0 0 6px;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+  color: var(--text);
+}
+.cta-band-text p {
+  color: var(--text-dim);
+  margin: 0;
+  font-size: 14px;
+}
+
+/* ============================================================
+   Footer
+   ============================================================ */
+.site-footer {
+  border-top: 1px solid var(--border);
+  background: #0e1116;
+  margin-top: 80px;
+}
+.site-footer .inner {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 40px 24px;
+}
+.site-footer .grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: 32px;
+  margin-bottom: 28px;
+}
+.site-footer .brand-row {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 12px;
+}
+.site-footer .brand-row img { height: 52px; }
+.site-footer .about {
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.6;
+  max-width: 320px;
+}
+.site-footer h4 {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+  margin: 0 0 14px;
+  font-weight: 600;
+}
+.site-footer ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.site-footer ul li { margin-bottom: 8px; }
+.site-footer ul a {
+  color: var(--text);
+  text-decoration: none;
+  font-size: 13px;
+  transition: color 0.15s;
+}
+.site-footer ul a:hover { color: var(--violet-soft); }
+.site-footer .bottom {
+  border-top: 1px solid var(--border);
+  padding-top: 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+.site-footer .bottom a {
+  color: var(--text-dim);
+  text-decoration: none;
+}
+.site-footer .bottom a:hover { color: var(--violet-soft); }
+
+/* ============================================================
+   Responsive
+   ============================================================ */
+@media (max-width: 860px) {
+  .cards-3, .steps, .feat-grid, .site-footer .grid {
+    grid-template-columns: 1fr;
+  }
+  .site-nav .links a:not(.btn):not(.compare) { display: none; }
+  .cta-band { padding: 32px 24px; }
+  .cta-band-inner { flex-direction: column; align-items: flex-start; }
+  .hero { padding: 36px 0 48px; }
+  .section { padding: 48px 0; }
+}
