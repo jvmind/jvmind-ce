@@ -195,8 +195,9 @@ def chat_stream(request: Request, req: ChatReq):
     session_lock = helpers._get_session_lock(req.session_id)
     if not session_lock.acquire(blocking=False):
         helpers._release_session_lock(req.session_id)
+        helpers._force_release_session_lock(req.session_id)
         return JSONResponse(
-            {"detail": "当前会话正在生成回复，请等待完成后再发送 / Session is generating a reply, please wait"},
+            {"detail": "会话锁已强制释放，请重试 / Session lock released, please retry"},
             status_code=409,
         )
 

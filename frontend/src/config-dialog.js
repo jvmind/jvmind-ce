@@ -1,5 +1,5 @@
 // config-dialog.js — 模型配置对话框
-import { t } from "../i18n/index.js";
+import { t, th } from "../i18n/index.js";
 import { csrfHeaders, escapeHtml } from "./shared.js";
 
 // ---------- 回调注册 ----------
@@ -36,9 +36,6 @@ async function loadConfigForm(apiFn) {
   try {
     const cfg = await apiFn("/api/config");
     _lastConfig = cfg;
-    const useBuiltIn = !!cfg.use_built_in;
-    document.getElementById("cfgModelModeBuiltIn").checked = useBuiltIn;
-    document.getElementById("cfgModelModeCustom").checked = !useBuiltIn;
     document.getElementById("cfgBaseUrl").value = cfg.openai_base_url || "";
     document.getElementById("cfgApiKey").value = "";
     document.getElementById("cfgApiKey").placeholder = cfg.openai_api_key_set
@@ -48,23 +45,10 @@ async function loadConfigForm(apiFn) {
     document.getElementById("cfgTemp").value = cfg.temperature ?? 0.3;
     document.getElementById("cfgMaxIter").value = cfg.max_iterations ?? 10;
     document.getElementById("cfgPrompt").value = cfg.system_prompt_extra || "";
-    updateBuiltInMode();
   } catch (e) {
     alert(t("config.load_error", { msg: e.message }));
   }
 }
-
-function updateBuiltInMode() {
-  const useBuiltIn = document.getElementById("cfgModelModeBuiltIn").checked;
-  document.getElementById("cfgCustomModelFields").style.display = useBuiltIn ? "none" : "";
-  document.getElementById("cfgBuiltinHint").textContent = useBuiltIn
-    ? t("config.use_built_in_on_hint")
-    : t("config.use_custom_model_hint");
-}
-
-document.querySelectorAll('input[name="cfgModelMode"]').forEach((el) => {
-  el.onchange = updateBuiltInMode;
-});
 
 // ---------- 预设 ----------
 document.querySelectorAll("#presetRow .preset-chip").forEach(chip => {
@@ -79,7 +63,7 @@ document.querySelectorAll("#presetRow .preset-chip").forEach(chip => {
 // ---------- 收集表单 ----------
 function collectForm() {
   return {
-    use_built_in: document.getElementById("cfgModelModeBuiltIn").checked,
+    use_built_in: false,
     openai_base_url: document.getElementById("cfgBaseUrl").value.trim(),
     openai_api_key: document.getElementById("cfgApiKey").value,
     openai_model: document.getElementById("cfgModel").value.trim(),
@@ -103,7 +87,6 @@ document.getElementById("testBtn").onclick = async () => {
         openai_base_url: f.openai_base_url,
         openai_api_key: f.openai_api_key,
         openai_model: f.openai_model,
-        use_built_in: f.use_built_in,
       }),
     });
     const data = await res.json();
@@ -120,7 +103,7 @@ document.getElementById("testBtn").onclick = async () => {
 // ---------- 保存 ----------
 document.getElementById("saveBtn").onclick = async () => {
   const f = collectForm();
-  if (!f.use_built_in && (!f.openai_base_url || !f.openai_model)) {
+  if (!f.openai_base_url || !f.openai_model) {
     alert(t("config.required_empty"));
     return;
   }

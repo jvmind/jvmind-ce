@@ -10,9 +10,6 @@ document.body.innerHTML = `
   <button id="testBtn"></button>
   <div id="testResult"></div>
   <div id="cfgCustomModelFields"></div>
-  
-  <input type="radio" id="cfgModelModeBuiltIn" name="cfgModelMode" />
-  <input type="radio" id="cfgModelModeCustom" name="cfgModelMode" />
   <input type="text" id="cfgBaseUrl">
   <input type="password" id="cfgApiKey">
   <input type="text" id="cfgModel">
@@ -27,16 +24,10 @@ const { setOnSaved, openConfig, closeConfig } = configDialogModule.default || co
 
 beforeEach(() => {
   // Reset form to known state before each test
-  if (document.getElementById('cfgModelModeBuiltIn')) {
-    document.getElementById('cfgModelModeBuiltIn').checked = false;
-    document.getElementById('cfgModelModeCustom').checked = false;
-    document.getElementById('cfgBaseUrl').value = '';
-    document.getElementById('cfgApiKey').value = '';
-    document.getElementById('cfgModel').value = '';
-    document.getElementById('cfgTemp').value = '';
-    document.getElementById('cfgMaxIter').value = '';
-    document.getElementById('cfgPrompt').value = '';
-  }
+  ['cfgBaseUrl', 'cfgApiKey', 'cfgModel', 'cfgTemp', 'cfgMaxIter', 'cfgPrompt'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
 });
 
 describe('config-dialog', () => {

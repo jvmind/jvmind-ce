@@ -2,6 +2,7 @@ import { t, setLang } from "../i18n/index.js";
 import { escapeHtml, detectReportMode } from "./shared.js";
 import { api } from "./api.js";
 import { state } from "./state.js";
+
 import { renderReport } from "./gc-analysis.js";
 import { renderJstackReport } from "./jstack-analysis.js";
 import { renderHeapdumpReportInto } from "./heapdump-analysis/heapdump.js";

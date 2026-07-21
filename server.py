@@ -70,6 +70,8 @@ from app.routes.heapdump_proxy import router as heapdump_proxy_router, close_mat
 from app.routes.jstack_reports import router as jstack_reports_router
 from app.routes.sessions import router as sessions_router
 from app.routes.skills import router as skills_router
+from app.routes.plans import router as plans_router
+from app.routes.settings import router as settings_router
 
 
 @asynccontextmanager
@@ -155,6 +157,8 @@ app.include_router(heapdump_upload_router)
 app.include_router(heapdump_proxy_router)
 app.include_router(skills_router)
 app.include_router(feedback_router)
+app.include_router(plans_router)
+app.include_router(settings_router)
 
 mount_frontend(app)
 

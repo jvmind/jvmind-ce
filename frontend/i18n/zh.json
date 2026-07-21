@@ -10,7 +10,7 @@
   "sidebar.admin": "管理员",
   "sidebar.logout": "退出",
   "sidebar.quota_title": "📋 {plan}",
-  "sidebar.quota_file": "📁 本月上传",
+  "sidebar.quota_file": "本月上传",
   "sidebar.quota_file_daily": "📁 本日上传",
   "sidebar.quota_llm": "🤖 内置 AI 调用",
   "sidebar.quota_reset": "内置模型 AI 调用额度每月自动重置；自定义模型（BYOK）不消耗该额度。",

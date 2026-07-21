@@ -1,9 +1,25 @@
 import { defineConfig } from "vite";
 import { resolve } from "path";
 
+function injectCssLink() {
+  return {
+    name: "inject-css-link",
+    transformIndexHtml(html) {
+      if (html.includes("<!-- inject-css-link -->")) {
+        return html.replace(
+          "<!-- inject-css-link -->",
+          '<link rel="stylesheet" href="/src/style.css">'
+        );
+      }
+      return html;
+    },
+  };
+}
+
 export default defineConfig({
   root: ".",
   base: "/",
+  plugins: [injectCssLink()],
   build: {
     outDir: "dist",
     emptyOutDir: true,

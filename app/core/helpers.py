@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from typing import Optional
 
@@ -209,6 +210,18 @@ def _release_session_lock(session_id: str) -> None:
         entry = state._SESSION_LOCKS.get(session_id)
         if entry is not None and entry[1] > 0:
             entry[1] -= 1
+
+
+def _force_release_session_lock(session_id: str) -> None:
+    """Force-release a session lock (e.g. stale lock from a crashed stream)."""
+    with state._SESSION_LOCKS_GUARD:
+        entry = state._SESSION_LOCKS.get(session_id)
+        if entry is not None and entry[1] > 0:
+            try:
+                entry[0].release()
+            except RuntimeError:
+                pass
+            del state._SESSION_LOCKS[session_id]
 
 
 def _reclaim_idle_session_locks(exclude: str = "") -> int:
@@ -440,7 +453,7 @@ __all__ = [
     "_check_org_member", "_get_org_owner_config",
     "_get_user_plan", "_can_make_llm_call", "_increment_metered_llm_call",
     "_try_consume_llm_call", "_check_llm_ready", "_check_chat_rate",
-    "_get_session_lock", "_release_session_lock",
+    "_get_session_lock", "_release_session_lock", "_force_release_session_lock",
     "get_builtin_config", "_get_agent", "_get_llm_config_source",
     "_uses_builtin_model", "_DEMO_SCOPE_PROMPT",
     "_delete_uploaded_file_record", "_read_upload_bounded",

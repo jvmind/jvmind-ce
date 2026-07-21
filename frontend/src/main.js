@@ -68,6 +68,7 @@ app.selectSession = selectSession;
 // ============ 模型配置对话框（逻辑已迁移到 config-dialog.js） ============
 document.getElementById("sbConfigBtn").onclick = () => openConfig(state.currentUser, api);
 setOnSaved(async (data) => {
+  state.llmConfigured = true;
   await app.updateConfigPrompt();
   if (!data.agent_ready) {
     alert(t("config.agent_not_ready", { msg: data.init_error }));
@@ -119,6 +120,10 @@ async function enterReportOnlyMode(reportMode) {
 // ---------- 初始化 ----------
 async function initApp() {
   await app.checkHealth();
+  try {
+    const cfg = await api("/api/config");
+    state.llmConfigured = !cfg.use_built_in && !!cfg.openai_base_url && !!cfg.openai_model;
+  } catch {}
   await app.loadSessions();
   await app.updateConfigPrompt();
   initHeapdump();

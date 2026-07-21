@@ -75,8 +75,6 @@ document.body.innerHTML = `
   <button id="testBtn"></button>
   <div id="testResult"></div>
   <div id="cfgCustomModelFields"></div>
-  <input type="radio" id="cfgModelModeBuiltIn" name="cfgModelMode" />
-  <input type="radio" id="cfgModelModeCustom" name="cfgModelMode" />
   <input type="text" id="cfgBaseUrl">
   <input type="password" id="cfgApiKey">
   <input type="text" id="cfgModel">

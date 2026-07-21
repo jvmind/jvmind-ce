@@ -9,7 +9,7 @@
   "sidebar.admin": "Admin",
   "sidebar.logout": "Logout",
   "sidebar.quota_title": "📋 {plan}",
-  "sidebar.quota_file": "📁 Monthly Uploads",
+  "sidebar.quota_file": "Monthly Uploads",
   "sidebar.quota_file_daily": "📁 Daily Uploads",
   "sidebar.quota_llm": "🤖 Built-in AI Calls",
   "sidebar.quota_reset": "Built-in AI calls reset monthly. BYOK custom-model calls are unmetered.",

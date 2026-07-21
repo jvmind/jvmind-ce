@@ -217,7 +217,7 @@ class DatabaseMemory:
                     "user_id": "",
                 }
             messages = [
-                {"id": m.id, "role": m.role, "content": m.content, "ts": m.ts, "author_id": m.author_id}
+                {"id": m.id, "role": m.role, "content": m.content, "ts": m.ts}
                 for m in self.db.query(MessageModel)
                 .filter(MessageModel.session_id == session_id)
                 .order_by(MessageModel.id)
@@ -300,9 +300,7 @@ class DatabaseMemory:
     # ---------- 消息 ----------
     def append_message(self, session_id: str, role: str, content: str) -> Optional[int]:
         try:
-            # 仅记录 user 消息的作者（团队会话区分发言人）；assistant 消息留空
-            author_id = self._user_id if role == "user" else None
-            msg = MessageModel(session_id=session_id, role=role, content=content, author_id=author_id, ts=_now_iso())
+            msg = MessageModel(session_id=session_id, role=role, content=content, ts=_now_iso())
             self.db.add(msg)
             # 如果是第一条用户消息，自动更新标题
             if role == "user":

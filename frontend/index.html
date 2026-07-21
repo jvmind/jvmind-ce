@@ -6,10 +6,10 @@
 <title data-i18n="app.title">JVMind</title>
 <link rel="icon" href="/image/favicon.ico" sizes="any">
 <link rel="icon" type="image/png" href="/image/favicon-96x96.png" sizes="96x96">
-<script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.10/dist/purify.min.js"></script>
-<link rel="stylesheet" href="/src/style.css">
+<!-- inject-css-link -->
+<script src="/lib/echarts.min.js"></script>
+  <script src="/lib/marked.min.js"></script>
+  <script src="/lib/dompurify.min.js"></script>
 </head>
 <body>
 
@@ -53,7 +53,7 @@
     <div class="sidebar-quota" id="sidebarQuota">
       <div class="sq-row"><span id="sbPlan"></span></div>
       <div class="sq-row sq-shared" id="sbSharedTag" style="display:none;color:var(--primary);" data-i18n="sidebar.quota_shared"></div>
-      <div class="sq-row"><span id="sbFileLabel"><span data-ico="Folder"></span> 本月上传</span><span><span id="sbFileUsed">0</span> / <span id="sbFileLimit">-</span></span></div>
+      <div class="sq-row"><span id="sbFileLabel"><span data-ico="Folder"></span> <span id="sbFileLabelText">本月上传</span></span><span><span id="sbFileUsed">0</span> / <span id="sbFileLimit">-</span></span></div>
       <div class="sq-row"><span data-i18n="sidebar.quota_llm"></span><span><span id="sbLlmUsed">0</span> / <span id="sbLlmLimit">-</span></span></div>
       <div class="sq-row" id="sbSessionsRow" style="display:none;"><span data-i18n="sidebar.quota_sessions">会话数</span><span><span id="sbSessionsUsed">0</span> / <span id="sbSessionsLimit">-</span></span></div>
       <div class="sq-row" id="sbCooldown" style="display:none;color:var(--orange);"><span data-ico="Clock"></span> <span id="sbCooldownText"></span></div>
@@ -145,18 +145,6 @@
       <button class="close" id="configClose" style="background:transparent;border:none;color:var(--text-dim);font-size:20px;cursor:pointer;">×</button>
     </div>
     <div class="modal-body">
-      <div class="form-row config-mode-row" id="cfgModelModeRow">
-        <label class="config-mode-option">
-          <input type="radio" name="cfgModelMode" id="cfgModelModeBuiltIn" value="builtin" />
-          <span data-i18n="config.use_built_in"></span>
-        </label>
-        <label class="config-mode-option">
-          <input type="radio" name="cfgModelMode" id="cfgModelModeCustom" value="custom" />
-          <span data-i18n="config.use_custom_model"></span>
-        </label>
-        <div class="hint" id="cfgBuiltinHint" data-i18n="config.use_built_in_hint"></div>
-      </div>
-
       <div id="cfgCustomModelFields">
         <div class="form-row">
           <label data-i18n="config.presets"></label>

@@ -11,6 +11,8 @@
     padding: 16px 12px;
     border-bottom: 1px solid var(--border);
   }
+  .sidebar header .logo-container { text-align: center; }
+  .sidebar header .logo { max-width: 100%; height: auto; }
   .sidebar header h1 {
     margin: 0;
     font-size: 16px;
@@ -38,6 +40,9 @@
     transition: all 0.2s ease;
     position: relative;
     overflow: hidden;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
   }
   .btn::before {
     content: '';
@@ -225,6 +230,7 @@
   }
   .sb-tool {
     font-size: 13px;
-    padding: 4px 4px !important;
+    padding: 4px 6px;
     min-width: 32px;
+    justify-content: center;
   }
