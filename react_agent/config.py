@@ -138,8 +138,8 @@ def validate_openai_base_url(value: str, allow_local: bool = False) -> str:
     is_local = host in ("localhost", "127.0.0.1", "::1")
     if allow_local and is_local:
         return url.rstrip("/")
-    if parsed.scheme != "https":
-        raise ValueError("Base URL 必须使用 https")
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("Base URL 必须使用 http 或 https")
     _raw = os.getenv("OPENAI_BASE_URL_ALLOWLIST", "")
     allow = []
     for h in _raw.split(","):
