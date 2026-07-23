@@ -201,22 +201,53 @@ describe('calculateGCHealth', () => {
     expect(calculateGCHealth(stats)).toBe('good');
   });
 
-  it('should return "bad" when more than 3 Full GC', () => {
+  it('should return "good" when 4 Full GC but no diagnosis (count alone is not enough)', () => {
     const stats = {
-      by_category: { Full: { count: 4 } },
+      by_category: { Full: { count: 4, max_pause_ms: 200 } },
       throughput: 1.0,
       max_heap_usage_pct: 90,
     };
-    expect(calculateGCHealth(stats)).toBe('bad');
+    expect(calculateGCHealth(stats)).toBe('good');
   });
 
-  it('should return "warn" when has Full GC but <= 3', () => {
+  it('should return "good" when has Full GC but no diagnosis and other metrics OK', () => {
     const stats = {
-      by_category: { Full: { count: 2 } },
+      by_category: { Full: { count: 2, max_pause_ms: 100 } },
       throughput: 1.0,
       max_heap_usage_pct: 90,
     };
+    expect(calculateGCHealth(stats)).toBe('good');
+  });
+
+  it('should return "warn" when Full GC pairs with diagnosis.oom_risk=medium', () => {
+    const stats = {
+      by_category: { Full: { count: 2, max_pause_ms: 100 } },
+      throughput: 1.0,
+      max_heap_usage_pct: 90,
+      diagnosis: { oom_risk: 'medium', leak_risk: 'none' },
+    };
     expect(calculateGCHealth(stats)).toBe('warn');
+  });
+
+  it('Serial: 4 Full GC with healthy heap/throughput and no diagnosis stays good', () => {
+    const stats = {
+      collector: 'Serial',
+      by_category: { Full: { count: 4, max_pause_ms: 100 } },
+      throughput: 1.0,
+      max_heap_usage_pct: 40,
+    };
+    expect(calculateGCHealth(stats)).toBe('good');
+  });
+
+  it('Serial: 4 Full GC with diagnosis.oom_risk=high escalates to bad', () => {
+    const stats = {
+      collector: 'Serial',
+      by_category: { Full: { count: 4, max_pause_ms: 100 } },
+      throughput: 1.0,
+      max_heap_usage_pct: 40,
+      diagnosis: { oom_risk: 'high', leak_risk: 'none' },
+    };
+    expect(calculateGCHealth(stats)).toBe('bad');
   });
 
   it('should return "warn" when heap usage > 95%', () => {
@@ -250,14 +281,15 @@ describe('calculateGCHealth', () => {
     expect(calculateGCHealth({})).toBe('good');
   });
 
-  it('ParallelGC: many Full GC events with fast pause is healthy (not bad)', () => {
+  it('ParallelGC: many Full GC events with short pause is not bad', () => {
     const stats = {
       collector: 'Parallel',
       by_category: { Full: { count: 10, max_pause_ms: 800 } },
       throughput: 0.97,
       max_heap_usage_pct: 70,
     };
-    expect(calculateGCHealth(stats)).toBe('good');
+    // 800ms pause > 200ms threshold → caution (not good, not bad).
+    expect(calculateGCHealth(stats)).toBe('caution');
   });
 
   it('ParallelGC: slow Full GC (>1s) escalates to warn', () => {
@@ -291,12 +323,23 @@ describe('calculateGCHealth', () => {
     expect(calculateGCHealth(stats)).toBe('bad');
   });
 
-  it('G1: any Full GC still escalates (not collector-aware relaxation)', () => {
+  it('G1: 1 Full GC without diagnosis stays good (count alone is not enough)', () => {
     const stats = {
       collector: 'G1',
       by_category: { Full: { count: 2, max_pause_ms: 200 } },
       throughput: 0.97,
       max_heap_usage_pct: 70,
+    };
+    expect(calculateGCHealth(stats)).toBe('good');
+  });
+
+  it('G1: Full GC with diagnosis.oom_risk=medium escalates to warn', () => {
+    const stats = {
+      collector: 'G1',
+      by_category: { Full: { count: 2, max_pause_ms: 200 } },
+      throughput: 0.97,
+      max_heap_usage_pct: 70,
+      diagnosis: { oom_risk: 'medium', leak_risk: 'none' },
     };
     expect(calculateGCHealth(stats)).toBe('warn');
   });
@@ -710,11 +753,22 @@ describe('formatHealthBanner', () => {
     return text;
   };
 
-  it('should return bad level when more than 3 Full GC', () => {
+  it('should return good level when 4 Full GC but no diagnosis', () => {
     const stats = {
-      by_category: { Full: { count: 4 } },
+      by_category: { Full: { count: 4, max_pause_ms: 100 } },
       throughput: 1.0,
       max_heap_usage_pct: 90,
+    };
+    const html = formatHealthBanner(stats, mockT);
+    expect(html).toContain('level-good');
+  });
+
+  it('should return bad level when Full GC pairs with diagnosis.oom_risk=high', () => {
+    const stats = {
+      by_category: { Full: { count: 4, max_pause_ms: 100 } },
+      throughput: 1.0,
+      max_heap_usage_pct: 90,
+      diagnosis: { oom_risk: 'high', leak_risk: 'none' },
     };
     const html = formatHealthBanner(stats, mockT);
     expect(html).toContain('level-bad');

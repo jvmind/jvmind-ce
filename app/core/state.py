@@ -91,7 +91,5 @@ if not _ALLOWED_ORIGINS:
 
 _ALLOWED_GC_EXTS = {".log", ".txt", ".gc"}
 _ALLOWED_JSTACK_EXTS = {".txt", ".log", ".tdump", ".jstack", ".json"}
-_MAX_GC_SIZE = 10 * 1024 * 1024
-_MAX_JSTACK_SIZE = 5 * 1024 * 1024
 
 _LOAD_TEST = os.getenv("LOAD_TEST_MODE", "0").lower() in ("1", "true", "yes")

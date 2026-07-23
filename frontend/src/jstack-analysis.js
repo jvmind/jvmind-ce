@@ -48,7 +48,6 @@ jstackUploadToggleBtn.onclick = (e) => {
 jstackUploadZone.appendChild(jstackUploadToggleBtn);
 
 const ALLOWED_JSTACK_EXTS = [".txt", ".log", ".tdump", ".jstack", ".json"];
-const DEFAULT_MAX_JSTACK_SIZE = 5 * 1024 * 1024;
 
 export async function uploadJstackFile(file) {
   if (!state.currentSessionId) { alert(t("chat.no_session")); return; }
@@ -56,13 +55,6 @@ export async function uploadJstackFile(file) {
   if (!ALLOWED_JSTACK_EXTS.includes(ext)) {
     document.getElementById("jstackError").style.display = "";
     document.getElementById("jstackError").textContent = t("jstack.error_invalid_type", { ext, exts: ALLOWED_JSTACK_EXTS.join(", ") });
-    return;
-  }
-  // 使用从后端获取的用户套餐限制，如果没有则使用默认值
-  const maxSize = window._uploadSizeLimit ? (window._uploadSizeLimit * 1024 * 1024) : DEFAULT_MAX_JSTACK_SIZE;
-  if (file.size > maxSize) {
-    document.getElementById("jstackError").style.display = "";
-    document.getElementById("jstackError").textContent = t("jstack.error_file_too_large", { size: (file.size / 1024 / 1024).toFixed(1), max: maxSize / 1024 / 1024 });
     return;
   }
   document.getElementById("jstackError").style.display = "none";

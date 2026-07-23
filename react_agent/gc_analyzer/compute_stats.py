@@ -36,17 +36,12 @@ def _safe_ratio(a, b):
 
 
 def _get_major_events(events, collector):
-    if collector == "Parallel":
-        return [e for e in events if e.category == "Full" and e.heap_before_mb > 0 and e.heap_total_mb > 0]
-    elif collector == "G1":
+    if collector == "G1":
         return [e for e in events if e.category in ("Full", "Mixed") and e.heap_before_mb > 0 and e.heap_total_mb > 0]
-    return []
+    return [e for e in events if e.category == "Full" and e.heap_before_mb > 0 and e.heap_total_mb > 0]
 
 
 def _diagnose_memory(events, collector, heap_max_mb, max_heap_usage_pct, avg_heap_usage_pct, by_category):
-    if not collector or collector not in ("Parallel", "G1"):
-        return {"leak_risk": "none", "oom_risk": "none", "findings": [], "recommendations_zh": [], "recommendations_en": [], "collector": collector}
-
     findings = []
     major = _get_major_events(events, collector)
 

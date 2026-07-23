@@ -167,43 +167,53 @@ export function parseSSE(block) {
 
 export function calculateGCHealth(stats) {
   const collector = stats.collector;
-  const fullCount = stats.by_category?.Full?.count || 0;
   const fullMaxPause = stats.by_category?.Full?.max_pause_ms || 0;
   const maxDurations = Object.values(stats.by_category || {}).map(x => x.max_pause_ms || 0);
   const maxPause = Math.max(...maxDurations, 0);
   const tp = stats.throughput;
   const heapPct = stats.max_heap_usage_pct || 0;
-  const hasFull = fullCount > 0;
-  const lowTp = tp != null && tp < 0.9;
-  const highHeap = heapPct > 95;
   const veryHighHeap = heapPct >= 98;
-  const isParallel = collector === "Parallel";
+  const highHeap = heapPct > 95;
+  const lowTp = tp != null && tp < 0.9;
 
   let level = "good";
-  if (isParallel) {
-    if (fullMaxPause > 2000) {
-      level = "bad";
-    } else if (fullMaxPause > 1000) {
-      level = "warn";
-    }
-  } else if (hasFull && fullCount > 3) {
-    level = "bad";
-  } else if (hasFull || (tp != null && tp < 0.9) || heapPct > 95) {
-    level = "warn";
-  } else if (lowTp || maxPause > 200) {
-    level = "caution";
-  }
 
-  if (veryHighHeap) {
-    level = "bad";
-  }
-
+  // 1) Backend diagnosis rules drive leak/OOM classification.
   const d = stats.diagnosis;
   if (d && (d.leak_risk === "high" || d.oom_risk === "high")) {
     level = "bad";
   } else if (d && (d.leak_risk === "medium" || d.oom_risk === "medium")) {
-    if (level === "good" || level === "caution") level = "warn";
+    level = "warn";
   }
+
+  // 2) Extreme heap usage is always critical, regardless of diagnosis.
+  if (veryHighHeap) {
+    level = "bad";
+  } else if (highHeap && level === "good") {
+    // High heap alone warrants attention; escalate from good.
+    level = "warn";
+  }
+
+  // 3) Throughput degradation is the primary user-visible signal.
+  if (tp != null && tp < 0.9 && (level === "good" || level === "caution")) {
+    level = "warn";
+  }
+
+  // 4) Parallel GC has very long Full GC pauses — flag based on pause time,
+  //    not Full GC count, so it matches the other collectors' semantics.
+  if (collector === "Parallel") {
+    if (fullMaxPause > 2000 && level !== "bad") {
+      level = "bad";
+    } else if (fullMaxPause > 1000 && level === "good") {
+      level = "warn";
+    }
+  }
+
+  // 5) Mild pause elevation → caution.
+  if (level === "good" && maxPause > 200) {
+    level = "caution";
+  }
+
   return level;
 }
 
@@ -252,7 +262,7 @@ export function isReportActionTarget(target) {
   return Boolean(target.closest(".del, .report-select, .report-select-all, .bulk-delete"));
 }
 
-export function validateGCFile(file, allowedExts = [".log", ".txt", ".gc"], maxSize = 10 * 1024 * 1024) {
+export function validateGCFile(file, allowedExts = [".log", ".txt", ".gc"], maxSize = Infinity) {
   const ext = "." + (file.name.split(".").pop() || "").toLowerCase();
   if (!allowedExts.includes(ext)) {
     return { valid: false, error: "invalid_type", ext, allowedExts };

@@ -415,8 +415,8 @@ def test_oom_risk_max_heap_98_is_high():
     assert result["oom_risk"] == "high", result
 
 
-def test_oom_risk_parallel_collector_is_not_oom_flagged():
-    """非 Parallel/G1 collector 不做 OOM 诊断（保持现状）。"""
+def test_oom_risk_non_parallel_g1_collector_runs_diagnosis():
+    """Serial/CMS 等非 Parallel/G1 collector 也跑诊断，但低强度数据下不应触发 OOM。"""
     events = [
         _make_full_gc("Allocation Failure", 60.0),
     ]
@@ -426,7 +426,42 @@ def test_oom_risk_parallel_collector_is_not_oom_flagged():
         by_category={"Full": {"count": 1}},
     )
     assert result["oom_risk"] == "none", result
-    assert result["leak_risk"] == "none", result
+
+
+def test_oom_risk_serial_high_heap_with_full_gc_is_flagged():
+    """Serial collector：高平均堆占用（≥95%）+ Full GC → 应触发 oom_critical。"""
+    events = [
+        GCEvent(id="y1", uptime_sec=5.0, duration_ms=80,
+                category="Young", cause="Allocation Failure",
+                heap_before_mb=3800, heap_after_mb=3700, heap_total_mb=4000,
+                is_concurrent=False),
+        _make_full_gc("Allocation Failure", 96.0, id_=2),
+    ]
+    result = _diagnose_memory(
+        events, "Serial", heap_max_mb=4000, max_heap_usage_pct=97.0,
+        avg_heap_usage_pct=96.0,
+        by_category={"Young": {"count": 1}, "Full": {"count": 1}},
+    )
+    oom_findings = [f for f in result["findings"] if f["rule"] == "oom_critical"]
+    assert oom_findings, result
+    assert oom_findings[0]["severity"] in ("medium", "high"), oom_findings[0]
+
+
+def test_serial_reclaim_declining_is_diagnosed():
+    """Serial：连续 Full GC 后堆下不来 → 应触发 reclaim/heap_floor 诊断。"""
+    # 堆下不来 + 持续高位 → heap_floor_rising 触发
+    events = [
+        _make_full_gc("Allocation Failure", 80.0, id_=1),
+        _make_full_gc("Allocation Failure", 85.0, id_=2),
+        _make_full_gc("Allocation Failure", 90.0, id_=3),
+    ]
+    result = _diagnose_memory(
+        events, "Serial", heap_max_mb=100, max_heap_usage_pct=92.0,
+        avg_heap_usage_pct=85.0,
+        by_category={"Full": {"count": 3}},
+    )
+    rules = [f["rule"] for f in result["findings"]]
+    assert "reclaim_declining" in rules or "post_gc_high_usage" in rules or "heap_floor_rising" in rules, result
 
 
 def main():
