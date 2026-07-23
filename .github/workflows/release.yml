@@ -24,6 +24,7 @@ jobs:
 
       - name: Sync frontend dist into wheel payload
         run: |
+          mkdir -p app/frontend
           rm -rf app/frontend/dist
           cp -r frontend/dist app/frontend/dist
           mkdir -p app/frontend/dist/src
