@@ -17,6 +17,22 @@ router = APIRouter(tags=["gc-reports"])
 _logger = logging.getLogger(__name__)
 
 
+def _stats_for_api(stats: dict) -> dict:
+    """Strip the heavy per-event list before sending stats over the wire.
+
+    ``stats["events"]`` holds every parsed GC event with its full raw log body,
+    which can be tens of MB for large uploads (especially ZGC). Frontend renderers
+    never consume it, and the LLM-side ``query_gc_events`` tool reads directly
+    from the DB row, so we can safely omit it from HTTP responses. ``events_total``
+    already gives the count for any UI that needs to display "N events parsed".
+    """
+    if not isinstance(stats, dict) or "events" not in stats:
+        return stats
+    slim = dict(stats)
+    slim.pop("events", None)
+    return slim
+
+
 @router.get("/api/me/reports")
 def list_my_reports(request: Request):
     user_id = helpers._get_current_user(request)
@@ -115,7 +131,7 @@ async def upload_gc_log(request: Request, sid: str, file: UploadFile = File(...)
         "report_id": rid,
         "file_id": file_id,
         "filename": report["filename"],
-        "stats": stats,
+        "stats": _stats_for_api(stats),
         "expires_at": expires_at,
     }
 
@@ -138,6 +154,9 @@ def get_gc_report(request: Request, sid: str, rid: str):
     r = agent.memory.get_gc_report(sid, rid)
     if not r:
         raise HTTPException(404, "report not found")
+    if isinstance(r, dict) and isinstance(r.get("stats"), dict):
+        r = dict(r)
+        r["stats"] = _stats_for_api(r["stats"])
     return r
 
 
@@ -166,8 +185,12 @@ def export_gc_report(request: Request, sid: str, rid: str, fmt: str = "json"):
                         headers={"Content-Disposition": f'attachment; filename="{fname}.csv"'})
 
     # 默认 JSON 导出
+    export_r = r
+    if isinstance(r, dict) and isinstance(r.get("stats"), dict):
+        export_r = dict(r)
+        export_r["stats"] = _stats_for_api(r["stats"])
     return JSONResponse(
-        content=r,
+        content=export_r,
         headers={"Content-Disposition": f'attachment; filename="{fname}.json"'},
     )
 

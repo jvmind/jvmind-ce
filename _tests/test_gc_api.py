@@ -242,3 +242,122 @@ def test_list_my_reports(auth_client):
     # When agent memory doesn't have list_all_reports, returns empty list
     # This is tested in normal execution
     assert isinstance(r.json()["reports"], list)
+
+
+# ---------- Regression: GC API response strips heavy `events` list (2026-07-24) ----------
+# ``stats["events"]`` carries every parsed event with full raw log body — for
+# multi-MB ZGC logs this can dwarf the input file and dominate HTTP response
+# size. Frontend never reads it, and the LLM-side ``query_gc_events`` tool reads
+# directly from the DB row, so we omit it from HTTP responses. Regression test
+# guards against the field creeping back into the wire format.
+
+def test_upload_response_strips_events_list(auth_client):
+    """POST /gc/upload response must NOT include stats.events (frontend unused, heavy)."""
+    client, _user = auth_client
+    sid = _create_session(client)
+    payload = _SAMPLE_LOG.read_bytes()
+
+    r = _upload_gc(client, sid, "strip.log", payload)
+    assert r.status_code == 200, r.text
+    upload = r.json()
+    assert "stats" in upload
+    assert "events" not in upload["stats"], (
+        "stats.events must be stripped from upload response; frontend never reads it "
+        "and the LLM query_gc_events tool reads from DB, not from this payload"
+    )
+    # Other essential fields still present
+    assert upload["stats"]["collector"] == "G1"
+    assert upload["stats"]["events_total"] >= 11
+    assert upload["stats"]["by_category"]["Full"]["count"] == 5
+    assert isinstance(upload["stats"]["series"], list)
+    assert isinstance(upload["stats"]["slowest"], list)
+
+
+def test_get_detail_response_strips_events_list(auth_client):
+    """GET /gc/reports/{rid} response must NOT include stats.events."""
+    client, _user = auth_client
+    sid = _create_session(client)
+    rid = _upload_gc(client, sid, "strip.log", _SAMPLE_LOG.read_bytes()).json()["report_id"]
+
+    detail = client.get(f"/api/sessions/{sid}/gc/reports/{rid}").json()
+    assert "stats" in detail
+    assert "events" not in detail["stats"], (
+        "stats.events must be stripped from detail response"
+    )
+    assert detail["stats"]["collector"] == "G1"
+    assert detail["stats"]["events_total"] >= 11
+
+
+def test_db_still_persists_events_for_llm_tool(auth_client):
+    """Internal DB row must keep full events so query_gc_events LLM tool still works."""
+    from app.core import state
+    from react_agent.gc_analyzer import query_events
+
+    client, _user = auth_client
+    user_id = client.cookies.get("uid") or "user_local"
+    sid = _create_session(client)
+    rid = _upload_gc(client, sid, "persist.log", _SAMPLE_LOG.read_bytes()).json()["report_id"]
+
+    agent = state._AGENTS[user_id]
+    raw = agent.memory.get_gc_report(sid, rid)
+    # DB layer returns the full record (events included) for internal consumers.
+    assert isinstance(raw["stats"].get("events"), list)
+    assert len(raw["stats"]["events"]) >= 11
+
+    # query_events (backend of the LLM tool) must still be able to read & filter events.
+    out = query_events(
+        agent.memory, sid,
+        report_id=rid,
+        category="Full", limit=10,
+    )
+    assert "Matched:" in out
+    assert "GC#" in out
+
+
+def test_export_json_strips_events_list(auth_client):
+    """/export?fmt=json must NOT include stats.events in the downloaded file."""
+    client, _user = auth_client
+    sid = _create_session(client)
+    rid = _upload_gc(client, sid, "export.log", _SAMPLE_LOG.read_bytes()).json()["report_id"]
+
+    r = client.get(f"/api/sessions/{sid}/gc/reports/{rid}/export?fmt=json")
+    assert r.status_code == 200
+    body = r.json()
+    assert "stats" in body
+    assert "events" not in body["stats"], (
+        "stats.events must be stripped from JSON export too"
+    )
+    assert body["stats"]["collector"] == "G1"
+
+
+def test_large_fixture_response_size_is_bounded(auth_client):
+    """End-to-end size check: with events stripped, response stays small
+    even for the largest fixture. Without the fix, this same call returned
+    multi-MB JSON dominated by stats.events[*].raw."""
+
+    fixture = _FIXTURES / "gc-jdk25-generational-zgc.log"
+    if not fixture.exists():
+        pytest.skip(f"missing fixture: {fixture.name}")
+    payload = fixture.read_bytes()
+
+    client, _user = auth_client
+    sid = _create_session(client)
+    upload_resp = _upload_gc(client, sid, fixture.name, payload)
+    assert upload_resp.status_code == 200, upload_resp.text
+    body = upload_resp.json()
+
+    upload_bytes = len(upload_resp.content)
+    # Sanity: parser actually found events; otherwise the test would be trivial.
+    assert body["stats"]["events_total"] > 0
+    # The whole response (including non-stats fields) must stay well under the
+    # raw input size. Before the fix a ~1.3 MB ZGC log returned ~10 MB JSON.
+    assert upload_bytes < len(payload) // 2, (
+        f"Upload response {upload_bytes} bytes exceeded half of input "
+        f"{len(payload)} bytes — events likely re-leaked into API payload"
+    )
+    assert "events" not in body["stats"]
+
+    detail = client.get(f"/api/sessions/{sid}/gc/reports/{body['report_id']}")
+    assert detail.status_code == 200
+    assert len(detail.content) < len(payload) // 2
+    assert "events" not in detail.json()["stats"]
