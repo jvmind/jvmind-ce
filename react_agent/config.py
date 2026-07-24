@@ -3,10 +3,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import ipaddress
 import os
 import secrets
-import socket
 from dataclasses import asdict, dataclass
 from typing import Any, Dict
 from urllib.parse import urlparse
@@ -134,40 +132,8 @@ def validate_openai_base_url(value: str, allow_local: bool = False) -> str:
     parsed = urlparse(url)
     if not parsed.hostname:
         raise ValueError("Base URL 缺少 host")
-    host = parsed.hostname.lower()
-    is_local = host in ("localhost", "127.0.0.1", "::1")
-    if allow_local and is_local:
-        return url.rstrip("/")
     if parsed.scheme not in ("http", "https"):
         raise ValueError("Base URL 必须使用 http 或 https")
-    _raw = os.getenv("OPENAI_BASE_URL_ALLOWLIST", "")
-    allow = []
-    for h in _raw.split(","):
-        h = h.strip().lower()
-        if not h:
-            continue
-        try:
-            entry_host = urlparse(h).hostname
-            allow.append(entry_host or h)
-        except Exception:
-            allow.append(h)
-    if allow and host not in allow:
-        raise ValueError("Base URL 不在允许列表中")
-    
-    # Skip strict DNS/IP check when running tests to avoid CI network blocks
-    if os.getenv("PYTEST_CURRENT_TEST") is not None:
-        return url.rstrip("/")
-    
-    try:
-        addresses = {ai[4][0] for ai in socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)}
-        for addr in addresses:
-            ip = ipaddress.ip_address(addr)
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
-                raise ValueError("Base URL 不能指向内网或本机地址")
-    except ValueError:
-        raise
-    except Exception:
-        raise ValueError("Base URL 无法解析")
     return url.rstrip("/")
 
 

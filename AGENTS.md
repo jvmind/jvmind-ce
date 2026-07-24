@@ -18,6 +18,7 @@
 - **Frontend**: vanilla ES modules, global state in `frontend/src/state.js`. i18n via `frontend/i18n/`.
 - **API keys**: Encrypted at rest with `CONFIG_ENCRYPTION_KEY`. Stored in DB per-user.
 - **Only outbound HTTP**: to user-configured LLM provider (OpenAI-compatible). No telemetry, no PostHog, no analytics.
+- **No URL allowlist**: `validate_openai_base_url()` only checks scheme (http/https) and host. Internal/private LLM endpoints (e.g. `http://10.x.x.x/v1`) are accepted.
 
 ## Python environment
 
@@ -68,7 +69,7 @@ This is because `app/frontend.py` serves `/src/style.css` from `app/frontend/dis
 - **Remote**: DeepSeek, OpenAI, Qwen, Kimi — any OpenAI-compatible endpoint. API key required.
 - **Local Ollama**: `http://localhost:11434/v1`, no API key needed. All data stays local.
 - UI preset (Settings → "Ollama · 本地") or `.env`: `OPENAI_BASE_URL=http://localhost:11434/v1` with empty `OPENAI_API_KEY`.
-- `validate_openai_base_url()` blocks private IPs by default; pass `allow_local=True` for localhost.
+- `validate_openai_base_url()` only checks scheme (http/https); no allowlist or private-IP block. Any OpenAI-compatible URL (including 10.x/192.168.x) works.
 
 ## Testing quirks
 
@@ -82,7 +83,7 @@ This is because `app/frontend.py` serves `/src/style.css` from `app/frontend/dis
 - **No `pytest-xdist`** (single-process — uvicorn shares global state + sqlite file).
 - Coverage gate: 63% (`--cov-fail-under=63` in `pytest.ini`).
 - Markers: `db` (SQLite), `smoke_llm` (hits real LLM, skipped by default), `paddle_sandbox` (hits Paddle sandbox, skipped unless `PADDLE_SANDBOX_API_KEY` set).
-- `validate_openai_base_url` does real DNS; patch **both** `app.routes.config` and `react_agent.user_manager_db` in tests.
+- `validate_openai_base_url` does no DNS/IP check; only validates scheme. Tests may still patch it on `app.routes.config` to bypass the openai client call.
 
 ## Key env vars
 
