@@ -144,11 +144,11 @@ The bundled query-service jar ships inside `vendor/mat/`, so users don't need to
 
 The agent is a **LangGraph** state machine in `react_agent/graph/`:
 
-- `facade.LangGraphAgent` — public API, matches the legacy agent's interface
+- `facade.LangGraphAgent` — public API for the agent
 - `graph_builder.build_graph` — wires nodes (Agent → Tools → Finalize)
 - `nodes` — tool execution + structured reasoning (cross-domain diagnosis for OOM)
 - `sse_adapter` — yields `user` / `token` / `step` / `fact_added` / `final` / `error` / `done` events
-- `llm_compat` / `parsing_compat` — shared mixins for tool-call error detection
+- `llm_compat` — non-streaming chat helper used by the summarizer and skills route
 
 Native OpenAI function-calling is the default. If a provider rejects the `tools` parameter, the agent surfaces a clear error rather than silently degrading.
 

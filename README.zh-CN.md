@@ -146,11 +146,11 @@ query-service jar 已包含在 `vendor/mat/`，用户无需自己编译 Java。
 
 Agent 是 `react_agent/graph/` 中的 **LangGraph** 状态机：
 
-- `facade.LangGraphAgent` — 公开 API，对齐旧版 agent 接口
+- `facade.LangGraphAgent` — agent 的公开 API
 - `graph_builder.build_graph` — 节点编排（Agent → Tools → Finalize）
 - `nodes` — 工具执行 + 结构化推理（OOM 跨域诊断）
 - `sse_adapter` — 产生 `user` / `token` / `step` / `fact_added` / `final` / `error` / `done` 事件
-- `llm_compat` / `parsing_compat` — 共享 mixin，用于工具调用错误检测
+- `llm_compat` — summarizer 与 skills 路由共用的非流式 chat 助手
 
 默认走原生 OpenAI function-calling。若 provider 拒绝 `tools` 参数，agent 会清晰报错而不是悄悄降级。
 
