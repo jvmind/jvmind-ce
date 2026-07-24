@@ -91,11 +91,10 @@ def inject_summary_into_prompt(
     """Append the persisted conversation summary to a system prompt string.
 
     Centralises the ``"\n\n[context:summary]\n{summary}"``
-    suffix used by both the legacy ``ReActAgent.run_stream`` injection site
-    (and its function-calling fallback rebuild) and the LangGraph
-    ``SSEAdapter._build_initial_messages`` / ``nodes._render_system_prompt``
-    sites. Keeping a single source of truth for the format means a future
-    change to the prefix or surrounding whitespace only has to be made here.
+    suffix used by the LangGraph ``SSEAdapter._build_initial_messages``
+    and ``nodes._render_system_prompt`` sites. Keeping a single source
+    of truth for the format means a future change to the prefix or
+    surrounding whitespace only has to be made here.
 
     Contract:
       - Returns ``system_prompt`` unchanged when there is no summary, the
