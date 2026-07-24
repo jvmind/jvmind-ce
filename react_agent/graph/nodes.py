@@ -52,10 +52,10 @@ def _render_system_prompt(
     """Return the system prompt to use.
 
     If ``state["system_prompt"]`` contains the ReAct placeholders, re-render
-    it via ``build_system_prompt`` using the latest memory facts and the
-    current ``text_mode``. Otherwise treat it as an already-rendered custom
-    prompt and pass it through. In both branches the persisted conversation
-    summary is appended (via
+    it via ``build_system_prompt`` using the latest memory facts.
+    Otherwise treat it as an already-rendered custom prompt and pass it
+    through. In both branches the persisted conversation summary is
+    appended (via
     :func:`react_agent.summarizer.inject_summary_into_prompt`) so the prompt
     that reaches ``_prepare_messages`` always carries it, even after
     re-rendering or per-iteration refresh.

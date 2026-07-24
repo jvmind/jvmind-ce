@@ -69,12 +69,6 @@ def build_graph(
         else tool_node_single
     )
 
-    def entry_route(state: Dict[str, Any]) -> str:
-        return "text_agent" if state.get("text_mode") else "agent"
-
-    def after_tools(state: Dict[str, Any]) -> str:
-        return "text_agent" if state.get("text_mode") else "agent"
-
     workflow.add_node("agent", agent)
     workflow.add_node("tools", tools_node)
     workflow.add_node("post_tools", nodes.tool_postprocess_node)
