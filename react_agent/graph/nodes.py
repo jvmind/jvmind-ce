@@ -77,7 +77,6 @@ def _render_system_prompt(
         template=raw or None,
         extra=state.get("system_prompt_extra", ""),
         lang=lang,
-        function_calling=True,
     )
     # Re-inject the summary on every iteration: the fresh `build_system_prompt`
     # output strips anything `_build_initial_messages` may have appended, so

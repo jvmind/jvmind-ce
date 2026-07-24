@@ -136,7 +136,6 @@ class LangGraphAgent(_LLMMixin):
             template=self.system_prompt_template or None,
             extra=self.system_prompt_extra,
             lang=lang,
-            function_calling=True,
         )
 
     def run(self, session_id: str, user_input: str, lang: str = "") -> Tuple[str, List[Dict[str, Any]]]:
