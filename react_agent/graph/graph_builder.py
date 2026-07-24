@@ -35,11 +35,6 @@ def build_graph(
         llm=llm, tools=tools, memory=memory,
         tools_describe=tools_describe, tool_names=tool_names,
     )
-    text_agent = partial(
-        nodes.text_mode_agent_node,
-        llm=llm, memory=memory,
-        tools_describe=tools_describe, tool_names=tool_names,
-    )
     force_final = partial(nodes.force_final_node, llm=llm, memory=memory)
     tool_node = ToolNode(tools, handle_tool_errors=True)
 
@@ -81,22 +76,17 @@ def build_graph(
         return "text_agent" if state.get("text_mode") else "agent"
 
     workflow.add_node("agent", agent)
-    workflow.add_node("text_agent", text_agent)
     workflow.add_node("tools", tools_node)
     workflow.add_node("post_tools", nodes.tool_postprocess_node)
     workflow.add_node("force_final", force_final)
 
-    workflow.add_conditional_edges(START, entry_route, {"agent": "agent", "text_agent": "text_agent"})
+    workflow.add_edge(START, "agent")
     workflow.add_conditional_edges(
         "agent", nodes.should_continue,
         {"tool_node": "tools", "force_final": "force_final", "end": END},
     )
-    workflow.add_conditional_edges(
-        "text_agent", nodes.should_continue,
-        {"tool_node": "tools", "force_final": "force_final", "end": END},
-    )
     workflow.add_edge("tools", "post_tools")
-    workflow.add_conditional_edges("post_tools", after_tools, {"agent": "agent", "text_agent": "text_agent"})
+    workflow.add_edge("post_tools", "agent")
     workflow.add_edge("force_final", END)
 
     return workflow.compile()

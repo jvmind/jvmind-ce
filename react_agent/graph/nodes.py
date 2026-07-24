@@ -1,7 +1,6 @@
 """LangGraph node functions and routing helpers (Stage 1)."""
 from __future__ import annotations
 
-import uuid
 from concurrent.futures import Executor
 from typing import Any, Dict, List, Literal
 
@@ -13,16 +12,11 @@ from langchain_core.messages import (
 )
 from langgraph.prebuilt import ToolNode
 
-from .parsing_compat import _ParsingMixin
 from .state import MAX_HISTORY_MESSAGES
 
 # P0-3 fix (2026-07-09): 移除 _set_session_id 调用 — thread-local 在 LangGraph
 # ToolNode 的 worker 线程上不可见；改为从 graph state["session_id"] 取值。
 # 各 node 函数现在只依赖 state 参数。
-
-
-_legacy_parser = _ParsingMixin()
-_legacy_parse = _legacy_parser._parse
 
 
 _REQUIRED_REACT_PLACEHOLDERS = ("{tool_names}", "{tool_descriptions}", "{memory_block}")
@@ -83,7 +77,7 @@ def _render_system_prompt(
         template=raw or None,
         extra=state.get("system_prompt_extra", ""),
         lang=lang,
-        function_calling=not state.get("text_mode", False),
+        function_calling=True,
     )
     # Re-inject the summary on every iteration: the fresh `build_system_prompt`
     # output strips anything `_build_initial_messages` may have appended, so
@@ -116,36 +110,6 @@ def agent_node(
     bound = llm.bind_tools(tools)
     response = bound.invoke(msgs)
     return {"messages": [response]}
-
-
-def text_mode_agent_node(
-    state: Dict[str, Any],
-    *,
-    llm,
-    memory,
-    tools_describe: str,
-    tool_names: List[str],
-) -> Dict[str, Any]:
-    system_prompt = _render_system_prompt(state, tools_describe, tool_names, memory)
-    msgs = _prepare_messages(state, system_prompt)
-    raw = llm.invoke(msgs, stop=["Observation:"])
-    text = raw.content if hasattr(raw, "content") else str(raw)
-    step = _legacy_parse(str(text))
-    if step.final_answer is not None:
-        return {"messages": [AIMessage(content=step.final_answer)]}
-    if step.action:
-        action = step.action.strip()
-        action_input = (step.action_input or "").strip()
-        tc_id = str(uuid.uuid4())
-        return {"messages": [AIMessage(
-            content=str(text),
-            tool_calls=[{
-                "id": tc_id,
-                "name": action,
-                "args": {"lg_text_arg": action_input},
-            }],
-        )]}
-    return {"messages": [AIMessage(content=str(text))]}
 
 
 def build_tool_node(tools) -> ToolNode:
