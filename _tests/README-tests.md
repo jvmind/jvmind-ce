@@ -39,7 +39,7 @@ Current baseline (127 tests, sqlite-backed):
 | `app/routes/admin.py` | ~68 % (stats/plans/users/billing/audit/user-management fully covered) |
 | `react_agent/gc_analyzer.py` | 79 % |
 | `react_agent/jstack_analyzer.py` | 74 % |
-| `react_agent/agent.py` | 54 % (full ReAct loop covered via `_chat_stream` stub) |
+| `react_agent/graph/facade.py` | ~50 % (SSE covered via `make_fake_agent`; live path via LangGraph graph) |
 | `react_agent/user_manager.py` | 0 % (legacy JSON path; replaced by `user_manager_db`) |
 
 Raise the gate (`pytest.ini --cov-fail-under=`) as more areas come
@@ -103,7 +103,7 @@ re-seed the default plans (`free` / `pro` / `team`).
 | `test_gc_api.py` | 10 | `/api/gc/*` upload / list / get / delete; rejects non-GC; auth required |
 | `test_gc_analyzer.py` | (legacy) | Pure-function unit tests on `gc_analyzer` |
 | `test_gc_matrix.py` | (legacy) | Multi-collector / multi-JDK regression matrix |
-| `test_jstack_api.py` | 21 | `/api/jstack/*` upload / list / sample / analyze SSE; `ReActAgent._chat_stream` stubbed at the class level |
+| `test_jstack_api.py` | 21 | `/api/jstack/*` upload / list / sample / analyze SSE; LangGraph path stubbed via `make_fake_agent` |
 | `test_memory_isolation.py` | 4 | Per-user `MemoryImpl` directories don't bleed |
 | `test_orgs_basic.py` | 9 | Org create / list / member roles |
 | `test_plans_public.py` | 4 | `GET /api/plans` shape, ordering, default-plan flag |
@@ -120,14 +120,10 @@ Total: **120 tests**, currently green.
    `admin_client`) — otherwise rows from a previous test leak in.
 2. Don't mutate `state._AGENTS` directly outside the fixtures; use
    `make_fake_agent(user_id)`.
-3. To stub the LLM during chat tests, override `agent._chat_stream` on
-   the `ReActAgent` **class**:
-   ```python
-   def fake(self, messages, stop=None):
-       yield "hello "
-       yield "world"
-   monkeypatch.setattr(ReActAgent, "_chat_stream", fake)
-   ```
+3. To stub the LLM during chat tests, use the `make_fake_agent`
+   fixture (see `_tests/conftest.py`). It drops a `FakeAgent` into
+   `state._AGENTS[user_id]` whose `run_stream()` yields the SSE events
+   you want — no monkeypatching needed.
 4. For `validate_openai_base_url` (does a real DNS lookup), patch
    **both** locations — the route imports it directly, but the
    user-manager update path calls it again under the hood:
