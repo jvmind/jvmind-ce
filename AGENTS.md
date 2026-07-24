@@ -114,7 +114,7 @@ Full procedure + troubleshooting: see [`docs/RELEASING.md`](./docs/RELEASING.md)
 - `make_fake_agent(user_id, reply)` stubs `run_stream()` to return fake SSE events.
 - `fake_paddle` replaces `state._PADDLE` with a capture-only fake.
 - `fake_email` captures verification codes into a list instead of sending SMTP.
-- To stub LLM in route tests: `monkeypatch.setattr(ReActAgent, "_chat_stream", fake_gen)`.
+- Tests stub the per-user agent via the `make_fake_agent(user_id, reply)` fixture in `_tests/conftest.py`; it replaces `state._AGENTS[user_id]` with a `FakeAgent` whose `run_stream()` yields canned SSE events.
 - **No `pytest-xdist`** (single-process — uvicorn shares global state + sqlite file).
 - Coverage gate: 63% (`--cov-fail-under=63` in `pytest.ini`).
 - Markers: `db` (SQLite), `smoke_llm` (hits real LLM, skipped by default), `paddle_sandbox` (hits Paddle sandbox, skipped unless `PADDLE_SANDBOX_API_KEY` set).
@@ -136,7 +136,7 @@ Full procedure + troubleshooting: see [`docs/RELEASING.md`](./docs/RELEASING.md)
 ## Framework quirks
 
 - **Windows patch**: `server.py` monkeypatches `_ProactorBasePipeTransport._call_connection_lost` for `WinError 10054` on client disconnect.
-- **LLM mode**: Defaults to native OpenAI function-calling. Falls back to text ReAct if provider rejects `tools`. `LLM_USE_FUNCTION_CALLING=0` forces text path.
+- **LLM mode**: Native OpenAI function-calling only. If the provider rejects the `tools` parameter, the agent surfaces a clear error rather than silently degrading.
 - **Agent**: `LangGraphAgent` in `react_agent/graph/`. 40-message history window. `MAX_ITERATIONS=10` default.
 - **System prompt**: `react_agent/prompts.py` — both Chinese and English templates.
 - **Frontend CSS**: Served separately (not Vite-bundled). Entry at `/src/style.css` which `@import`s files from `src/css/`.

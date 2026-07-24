@@ -132,9 +132,9 @@ class XxxModel(Base):
 
 ---
 
-## 3. ReAct Agent（`react_agent/agent.py`, `tools.py`）
+## 3. ReAct Agent（`react_agent/graph/facade.py`, `tools.py`）
 
-- 双执行路径：原生 function-calling（默认）+ 文本 ReAct 降级；`LLM_USE_FUNCTION_CALLING=0` 强制文本路径
+- 单一执行路径：原生 OpenAI function-calling via LangGraph；provider 拒绝 `tools` 时直接报错
 - 新增工具：在 `default_tools()` 中 `reg.register(Tool(...))`
 
 ```python
