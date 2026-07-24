@@ -65,7 +65,6 @@ class SSEAdapter:
             "lang": lang,
             "max_iterations": max_iterations,
             "iteration": 0,
-            "text_mode": False,
             "scratchpad": "",
             "system_prompt": system_prompt,
             "system_prompt_extra": system_prompt_extra,

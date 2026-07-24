@@ -18,7 +18,6 @@ class AgentState(TypedDict, total=False):
     lang: str
     max_iterations: int
     iteration: int
-    text_mode: bool
     scratchpad: str
     system_prompt: str
     system_prompt_extra: str
