@@ -54,18 +54,26 @@ def put_config(request: Request, req: ConfigUpdateReq):
     except ValueError as e:
         raise HTTPException(400, str(e))
     # P0-2 fix (2026-07-09): invalidation order bug.
-    # Old code: `_get_agent` first → returned the CACHED agent with the OLD config
-    # → then closed its memory and re-inserted the same (now broken) object →
-    # user agent permanently unusable (every chat request found a closed memory).
-    # New code: evict first; next request rebuilds from fresh config. No
-    # double-handle, no leak.
-    old_agent = state._AGENTS.pop(user_id, None)
+    # P0-4 fix (2026-07-24): race condition.
+    # Old code popped the cached agent before rebuilding — the window
+    # between pop and rebuild let concurrent chat requests race on the
+    # missing key and crash (``KeyError: 'user_local'``, sometimes surfaced
+    # as ``move_to_end`` in ``_LRUDict.__getitem__``).
+    #
+    # New approach: build the replacement agent OUTSIDE the lock (slow LLM
+    # init), then atomically overwrite the cache entry. The cache never
+    # appears empty to readers — they always see either the old agent
+    # (valid) or the new agent (valid). Close the old memory AFTER the
+    # swap so no in-flight chat request can land on a closed handle.
+    new_agent = helpers._build_agent(user_id)
+    with state._AGENTS_LOCK:
+        old_agent = state._AGENTS.get(user_id)
+        state._AGENTS[user_id] = new_agent
     if old_agent is not None and hasattr(old_agent.memory, "close"):
         try:
             old_agent.memory.close()
         except Exception:
             _logger.debug("agent memory close failed during config update", exc_info=True)
-    state._AGENTS[user_id] = helpers._get_agent(user_id)  # rebuild with new config
     log_audit(request, "config.update", user_id=user_id, resource=f"user:{user_id}", details={"fields": sorted(patch.keys())})
     cfg = LLMConfig.from_dict(user.config or {})
     return {

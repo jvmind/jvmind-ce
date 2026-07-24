@@ -26,14 +26,24 @@ class _LRUDict(OrderedDict):
     def __getitem__(self, key):
         with self._lock:
             value = super().__getitem__(key)
-            self.move_to_end(key)
+            try:
+                self.move_to_end(key)
+            except KeyError:
+                # Defensive: the key was in the dict but not in OrderedDict's
+                # internal __map (should not happen via _LRUDict's own
+                # methods, but reported in production). LRU bookkeeping is
+                # best-effort; the value is what matters.
+                pass
             return value
 
     def get(self, key, default=None):
         with self._lock:
             if super().__contains__(key):
                 value = super().__getitem__(key)
-                self.move_to_end(key)
+                try:
+                    self.move_to_end(key)
+                except KeyError:
+                    pass
                 return value
             return default
 
@@ -80,7 +90,9 @@ _SESSION_LOCKS_MAX = int(os.getenv("SESSION_LOCK_CACHE_MAX", "2000"))
 
 _USER_MANAGER = None
 _AGENTS: Dict[str, object] = _LRUDict(_AGENTS_MAX)
-_AGENTS_LOCK = threading.Lock()
+# RLock so _AGENTS_LOCK can be held across nested _get_agent / rebuild paths
+# without deadlocking the same thread.
+_AGENTS_LOCK = threading.RLock()
 _SESSION_LOCKS: Dict[str, threading.Lock] = {}
 _SESSION_LOCKS_GUARD = threading.Lock()
 

@@ -255,55 +255,65 @@ def get_builtin_config() -> dict:
     return {"openai_api_key": api_key, "openai_base_url": base_url, "openai_model": model}
 
 
+def _build_agent(user_id: str):
+    """Construct a fresh LangGraphAgent for the user from persisted config.
+
+    Performs no dict mutation and acquires no locks — safe to call from any
+    context. Raises HTTPException(404) if the user does not exist.
+    """
+    um = _ensure_user_manager()
+    user = um.get_user(user_id)
+    if not user:
+        raise HTTPException(404, "用户不存在 / User not found")
+    cfg = dict(user.config or {})
+    session_dir = os.getenv("SESSION_DIR", "./sessions")
+    use_builtin = bool(cfg.get("use_built_in", True)) if cfg else True
+    if use_builtin:
+        builtin = get_builtin_config()
+        if builtin["openai_api_key"]:
+            cfg["openai_api_key"] = builtin["openai_api_key"]
+        if builtin["openai_base_url"]:
+            cfg["openai_base_url"] = builtin["openai_base_url"]
+        if builtin["openai_model"]:
+            cfg["openai_model"] = builtin["openai_model"]
+
+    from react_agent.config import validate_openai_base_url
+    api_key = cfg.get("openai_api_key", "") or ""
+    user_base_url = cfg.get("openai_base_url", "") or "https://api.deepseek.com/v1"
+    is_local = any(h in user_base_url.lower() for h in ("localhost", "127.0.0.1"))
+    base_url = validate_openai_base_url(user_base_url, allow_local=is_local)
+    if is_local and not api_key:
+        api_key = "noop"  # Ollama 本地不需要 API Key
+    model = cfg.get("openai_model", "") or "deepseek-chat"
+
+    memory = state.MemoryImpl(user_id=user_id, session_dir=f"{session_dir}/{user_id}")
+    common_kwargs = dict(
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+        temperature=float(cfg.get("temperature", 0.3)),
+        system_prompt_template=_get_system_setting("prompt_react_agent", ""),
+        system_prompt_extra=cfg.get("system_prompt_extra", "") or "",
+        memory=memory,
+        max_iterations=int(cfg.get("max_iterations", 10)),
+    )
+
+    from react_agent.graph.facade import LangGraphAgent
+    agent = LangGraphAgent(**common_kwargs)
+    sm = state.SkillMgrImpl(user_id)
+    skills = sm.list()
+    agent.load_skills(skills)
+    return agent
+
+
 def _get_agent(user_id: str):
-    if user_id not in state._AGENTS:
-        with state._AGENTS_LOCK:
-            if user_id in state._AGENTS:
-                return state._AGENTS[user_id]
-            um = _ensure_user_manager()
-            user = um.get_user(user_id)
-            if not user:
-                raise HTTPException(404, "用户不存在 / User not found")
-            cfg = dict(user.config or {})
-            session_dir = os.getenv("SESSION_DIR", "./sessions")
-            use_builtin = bool(cfg.get("use_built_in", True)) if cfg else True
-            if use_builtin:
-                builtin = get_builtin_config()
-                if builtin["openai_api_key"]:
-                    cfg["openai_api_key"] = builtin["openai_api_key"]
-                if builtin["openai_base_url"]:
-                    cfg["openai_base_url"] = builtin["openai_base_url"]
-                if builtin["openai_model"]:
-                    cfg["openai_model"] = builtin["openai_model"]
-
-            from react_agent.config import validate_openai_base_url
-            api_key = cfg.get("openai_api_key", "") or ""
-            user_base_url = cfg.get("openai_base_url", "") or "https://api.deepseek.com/v1"
-            is_local = any(h in user_base_url.lower() for h in ("localhost", "127.0.0.1"))
-            base_url = validate_openai_base_url(user_base_url, allow_local=is_local)
-            if is_local and not api_key:
-                api_key = "noop"  # Ollama 本地不需要 API Key
-            model = cfg.get("openai_model", "") or "deepseek-chat"
-
-            memory = state.MemoryImpl(user_id=user_id, session_dir=f"{session_dir}/{user_id}")
-            common_kwargs = dict(
-                api_key=api_key,
-                base_url=base_url,
-                model=model,
-                temperature=float(cfg.get("temperature", 0.3)),
-                system_prompt_template=_get_system_setting("prompt_react_agent", ""),
-                system_prompt_extra=cfg.get("system_prompt_extra", "") or "",
-                memory=memory,
-                max_iterations=int(cfg.get("max_iterations", 10)),
-            )
-
-            from react_agent.graph.facade import LangGraphAgent
-            agent = LangGraphAgent(**common_kwargs)
-            sm = state.SkillMgrImpl(user_id)
-            skills = sm.list()
-            agent.load_skills(skills)
-            state._AGENTS[user_id] = agent
-    return state._AGENTS[user_id]
+    # Hold _AGENTS_LOCK for the entire flow so a concurrent pop in another
+    # thread (e.g. config.py:put_config mid-rebuild) cannot leave us with a
+    # missing key between the existence check and the read on the way out.
+    with state._AGENTS_LOCK:
+        if user_id not in state._AGENTS:
+            state._AGENTS[user_id] = _build_agent(user_id)
+        return state._AGENTS[user_id]
 
 
 def _get_llm_config_source(user_id: str):
