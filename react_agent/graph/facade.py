@@ -1,4 +1,4 @@
-"""LangGraphAgent — public facade matching legacy ReActAgent API (Stage 1)."""
+"""LangGraphAgent — single-path execution facade."""
 from __future__ import annotations
 
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
@@ -34,7 +34,6 @@ class LangGraphAgent(_LLMMixin):
         self.system_prompt_extra = system_prompt_extra or ""
         self.memory = memory
         self._skill_defs: List[dict] = []
-        self._fc_unsupported: bool = False
         self._llm = None
         self._tools: List = []
         self._tools_describe: str = ""
@@ -137,7 +136,7 @@ class LangGraphAgent(_LLMMixin):
             template=self.system_prompt_template or None,
             extra=self.system_prompt_extra,
             lang=lang,
-            function_calling=not self._fc_unsupported,
+            function_calling=True,
         )
 
     def run(self, session_id: str, user_input: str, lang: str = "") -> Tuple[str, List[Dict[str, Any]]]:
@@ -158,8 +157,9 @@ class LangGraphAgent(_LLMMixin):
         lang: str = "",
         should_stop: Optional[Callable[[], bool]] = None,
     ) -> Generator[Dict[str, Any], None, None]:
-        if self._fc_unsupported or self._graph is None:
-            yield from self._legacy_stream(session_id, user_input, llm_input, lang, should_stop=should_stop)
+        if self._graph is None:
+            yield {"type": "error", "content": "Agent is not configured (missing API key, base URL, or model)."}
+            yield {"type": "done", "message_id": None}
             return
         token_usage = None
         summary_triggered = False
@@ -227,11 +227,6 @@ class LangGraphAgent(_LLMMixin):
                 if event.get("type") == "done":
                     _trigger_summary()
         except Exception as e:
-            msg = str(e)
-            if self._is_tools_unsupported_error(msg):
-                self._fc_unsupported = True
-                yield from self._legacy_stream(session_id, user_input, llm_input, lang, should_stop=should_stop)
-                return
             yield {"type": "error", "content": f"{type(e).__name__}: {e}"}
             yield {"type": "done", "message_id": None}
         finally:
@@ -266,30 +261,8 @@ class LangGraphAgent(_LLMMixin):
             msgs[-1] = HumanMessage(content=text_input)
         return msgs
 
-    def _legacy_stream(self, session_id, user_input, llm_input, lang, should_stop=None):
-        """社区版无 ReAct 后备路径：直接报错。"""
-        raise RuntimeError(
-            "Legacy ReAct fallback is not available in JVMind CE; "
-            "configure an OpenAI-compatible provider that supports tools.",
-        )
-
-    @staticmethod
-    def _is_tools_unsupported_error(msg: str) -> bool:
-        keywords = ["does not support", "tools is not supported", "unsupported parameter: tools",
-                    "unrecognized parameter", "invalid_request_error", "tool_choice"]
-        m = msg.lower()
-        return any(k in m for k in keywords)
-
-    def _chat_stream(self, *args, **kwargs):
-        raise NotImplementedError("_chat_stream is a stub for monkeypatch compatibility; use run_stream instead")
-
     def _ensure_client(self) -> OpenAI:
-        """Lazily build the OpenAI client used by ``_LLMMixin._chat``.
-
-        Mirrors ``ReActAgent._ensure_client`` so the same mixin's helpers
-        (``_chat``, ``_chat_stream_tools``) work uniformly on both agents.
-        The client is built once and cached on ``self.client``.
-        """
+        """Builds the OpenAI client lazily on first use; cached on ``self.client``."""
         if self.client is None:
             api_key = self.api_key
             is_local = self.base_url and any(h in self.base_url.lower() for h in ("localhost", "127.0.0.1"))
