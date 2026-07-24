@@ -1,5 +1,4 @@
-"""ReAct Prompt 模板"""
-import re
+"""ReAct system prompt template (FC mode only)."""
 
 REACT_SYSTEM_PROMPT = """You are an intelligent assistant using the ReAct (Reasoning + Acting) framework.
 你是一个使用 ReAct (Reasoning + Acting) 框架运行的智能助手。
@@ -88,7 +87,6 @@ def build_system_prompt(
     template: str | None = None,
     extra: str = "",
     lang: str = "",
-    function_calling: bool = False,
 ) -> str:
     if facts:
         def _render(item):
@@ -100,21 +98,6 @@ def build_system_prompt(
     else:
         memory_block = "（No long-term memory facts yet / 当前没有长期记忆事实。）"
     prompt_template = (template or "").strip() or REACT_SYSTEM_PROMPT
-    # Existing databases may still store the older default prompt. Keep admin-customized
-    # templates working, but soften the legacy tool-first rule at render time.
-    # Use regex to tolerate whitespace/formatting differences in admin-customized templates.
-    updated_tool_rule = """3. Use tools only when they are clearly relevant to the user's request, such as analyzing uploaded
-   files/reports, reading an existing report, drilling into a thread, remembering user facts, or doing
-   calculations/time lookups. For general knowledge or troubleshooting questions, answer directly.
-   只有当工具与用户请求明确相关时才调用工具，例如分析上传文件/报告、读取已有报告、钻取线程、
-   记忆用户事实、计算或查询时间。对于通用知识或排障方法类问题，请直接回答。
-4. If you answer directly, you MUST include `Final Answer:` and provide a complete, useful answer.
-   直接回答时必须包含 `Final Answer:`，并给出完整、有帮助的回答。"""
-    _legacy_pattern = re.compile(
-        r'3\.\s*Before answering directly,.*?判断是否有适合处理当前请求的工具/技能。如果有匹配的技能，必须调用它，不要跳过它。',
-        re.DOTALL
-    )
-    prompt_template = _legacy_pattern.sub(lambda m: updated_tool_rule, prompt_template, count=1)
     validate_react_prompt_template(prompt_template)
     rendered = prompt_template.format(
         tool_names=", ".join(tool_names + ["remember"]),
@@ -123,17 +106,16 @@ def build_system_prompt(
     )
     if extra.strip():
         rendered += "\n\nAdditional system instructions / 追加系统提示：\n" + extra.strip()
-    if function_calling:
-        rendered += (
-            "\n\nTOOL-CALLING MODE / 工具调用模式：\n"
-            "You can call tools natively. When a tool is needed, use the function/tool-call "
-            "mechanism — do NOT write 'Thought:', 'Action:', 'Action Input:' or 'Final Answer:' "
-            "as plain text. When you have enough information (or no tool is needed), reply directly "
-            "with the final answer as normal assistant content.\n"
-            "你可以直接调用工具。需要工具时请使用原生的函数/工具调用机制，"
-            "不要再用纯文本写 'Thought:'、'Action:'、'Action Input:'、'Final Answer:' 等标记。"
-            "当信息足够（或不需要工具）时，直接以普通回答内容给出最终答案即可。"
-        )
+    rendered += (
+        "\n\nTOOL-CALLING MODE / 工具调用模式：\n"
+        "You can call tools natively. When a tool is needed, use the function/tool-call "
+        "mechanism — do NOT write 'Thought:', 'Action:', 'Action Input:' or 'Final Answer:' "
+        "as plain text. When you have enough information (or no tool is needed), reply directly "
+        "with the final answer as normal assistant content.\n"
+        "你可以直接调用工具。需要工具时请使用原生的函数/工具调用机制，"
+        "不要再用纯文本写 'Thought:'、'Action:'、'Action Input:'、'Final Answer:' 等标记。"
+        "当信息足够（或不需要工具）时，直接以普通回答内容给出最终答案即可。"
+    )
     import datetime as _dt
     now_str = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S (%A)")
     rendered += f"\n\nCurrent time (UTC) / 当前时间（UTC）: {now_str}"
