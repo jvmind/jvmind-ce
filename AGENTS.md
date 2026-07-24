@@ -49,20 +49,55 @@ cd frontend && npm run dev          # Vite dev (port 3000, proxy /api → :8000)
 cd frontend && npm run build        # outputs to frontend/dist/
 cd frontend && npm run test         # vitest (jsdom)
 
-# Build wheel (for PyPI release)
-rm -rf build jvmind_ce.egg-info && python -m build --wheel
+# Build wheel locally (only needed for inspecting dist/; CI builds in GitHub Actions)
+cd frontend && npm run build && cd ..
+mkdir -p app/frontend
+rm -rf app/frontend/dist
+cp -r frontend/dist app/frontend/dist
+mkdir -p app/frontend/dist/src
+cp -r frontend/src/style.css frontend/src/css app/frontend/dist/src/
+rm -rf build jvmind_ce.egg-info
+python -m build --wheel
 ```
 
 ## Crucial: frontend build → wheel packaging
 
-After `npm run build`, the built assets in `frontend/dist/` must be synced to `app/frontend/dist/` **and** CSS must be copied:
+The wheel must bundle the built frontend (it's what `app/frontend.py` serves at runtime). The four `cp` lines above are mandatory — without the CSS copy, all styling breaks in production installs.
+
+## Release flow (PyPI via Trusted Publishing)
+
+**Do NOT `twine upload` manually** — use CI. PyPI rejects duplicate filenames with HTTP 400 (see https://pypi.org/help/#file-name-reuse), so always bump version. The workflow lives in `.github/workflows/release.yml`; it builds on Ubuntu + uploads to PyPI via OIDC (`pypa/gh-action-pypi-publish`). PyPI project has a Trusted Publisher configured for `jvmind/jvmind-ce@release.yml`. No PyPI token required locally.
 
 ```bash
-rm -rf app/frontend/dist && cp -r frontend/dist app/frontend/dist
-mkdir -p app/frontend/dist/src && cp -r frontend/src/style.css frontend/src/css app/frontend/dist/src/
+# 1. Edit code, run tests, build frontend locally to spot-check
+source .venv/bin/activate
+cd frontend && npm run build && cd ..
+cd frontend && npm test -- --run && cd ..   # 277 tests
+python -m pytest _tests                     # 148 tests
+
+# 2. Bump version in pyproject.toml
+sed -i 's/version = "0.1.6"/version = "0.1.7"/' pyproject.toml
+
+# 3. Commit, push, tag (ONE command each)
+git add pyproject.toml
+git commit -m "release: 0.1.7 — <short summary>"
+git push origin master
+git tag v0.1.7
+git push origin v0.1.7
+# → GitHub Actions runs release.yml → publishes to PyPI
+
+# 4. Verify
+curl -s https://pypi.org/pypi/jvmind-ce/0.1.7/json | python -c "import json,sys; print(json.load(sys.stdin)['info']['version'])"
 ```
 
-This is because `app/frontend.py` serves `/src/style.css` from `app/frontend/dist/src/` (not from the source tree) when running from the wheel. Skipping the CSS copy breaks all styling in production.
+Full procedure + troubleshooting: see [`docs/RELEASING.md`](./docs/RELEASING.md).
+
+### Common release-time traps
+
+- **Forgetting to bump version** → PyPI returns `400 File already exists`. The workflow will succeed end-to-end except for the final upload; fix by bumping + retagging.
+- **Tag pointing at old commit** → fix with `git tag -d v0.x.y && git tag v0.x.y && git push origin :refs/tags/v0.x.y && git push origin v0.x.y`.
+- **Frontend build skipped** → wheel has no dist; users see unstyled page. The four `cp` lines above are non-negotiable.
+- **Tests pass locally but CI fails** → check `.github/workflows/tests.yml` matrix; release workflow does NOT depend on tests passing.
 
 ## LLM providers
 
