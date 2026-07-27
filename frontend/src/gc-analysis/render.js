@@ -22,6 +22,94 @@ export function appendSystemHint(html) {
 // ---------- 渲染报告 ----------
 let _lastAiBodyScroll = 0;
 
+// 内存诊断区块 (root-cause oriented: 根因 → 证据 → 次生 → 建议)
+// 拆成独立函数以便单元测试。返回 4 段独立 subsection 的 HTML:
+//   1. 根因 (root_cause)         — gc.root_cause.label
+//   2. 证据 (evidence)            — gc.diagnosis_evidence
+//   3. 次生表现 (symptoms)         — gc.diagnosis_symptoms
+//   4. 建议措施 (recommendations) — gc.diagnosis_recommendations
+// 新结构优先 (evidence / symptoms / recommendations 数组);
+// fallback 到旧结构 (findings + recommendations_zh/en 平铺).
+export function renderDiagnosisSection(d, tFn) {
+  if (!d) return "";
+  const lang = getLang();
+  const hasNew = d.evidence !== undefined && d.symptoms !== undefined;
+  const hasLegacyFindings = Array.isArray(d.findings) && d.findings.length > 0;
+
+  const renderFinding = (f) => `
+      <div class="diag-finding diag-severity-${escapeHtml(String(f.severity || ""))}">
+        <span class="diag-severity-tag">${tFn("gc.diagnosis_severity_" + f.severity)}</span>
+        <div class="diag-finding-body">
+          <div class="diag-finding-title">${escapeHtml(f["title_" + lang] || f.title_zh || "")}</div>
+          <div class="diag-finding-detail">${escapeHtml(f["detail_" + lang] || f.detail_zh || "")}</div>
+        </div>
+      </div>
+    `;
+
+  // 1) 根因
+  const rootCauseBlock = d.root_cause ? `
+      <div class="diag-subsection diag-subsection-root rc-category-${escapeHtml(d.root_cause.category || "")}">
+        <div class="diag-subsection-title">${escapeHtml(tFn("gc.root_cause.label"))}</div>
+        <div class="rc-title">${escapeHtml(d.root_cause[`label_${lang}`] || d.root_cause.label_zh || "")}</div>
+        ${d.root_cause.summary_zh || d.root_cause.summary_en ? `<div class="rc-summary">${escapeHtml(d.root_cause[`summary_${lang}`] || d.root_cause.summary_zh || "")}</div>` : ""}
+      </div>
+    ` : "";
+
+  // 2) 证据 (新结构 evidence) / fallback 到旧 findings 合并
+  const evidenceList = hasNew ? (d.evidence || []) : (hasLegacyFindings ? d.findings : []);
+  const evidenceBlock = evidenceList.length ? `
+      <div class="diag-subsection">
+        <div class="diag-subsection-title">${escapeHtml(tFn("gc.diagnosis_evidence"))}</div>
+        ${evidenceList.map(renderFinding).join("")}
+      </div>
+    ` : "";
+
+  // 3) 次生表现 (新结构 symptoms) — 仅在 evidence/symptoms 拆分时存在
+  const symptomsList = hasNew ? (d.symptoms || []) : [];
+  const symptomsBlock = symptomsList.length ? `
+      <div class="diag-subsection">
+        <div class="diag-subsection-title">${escapeHtml(tFn("gc.diagnosis_symptoms"))}</div>
+        ${symptomsList.map(renderFinding).join("")}
+      </div>
+    ` : "";
+
+  // 4) 建议措施 (新结构 tiered) / fallback 旧 recommendations_zh/en
+  let recsBlock = "";
+  if (Array.isArray(d.recommendations) && d.recommendations.length > 0) {
+    const recs = d.recommendations;
+    recsBlock = `
+        <div class="diag-subsection">
+          <div class="diag-subsection-title">${escapeHtml(tFn("gc.diagnosis_recommendations"))}</div>
+          ${recs.map(r => `
+            <div class="diag-rec-item rec-tier-${escapeHtml(String(r.tier || ""))}">
+              <div class="diag-rec-action">${escapeHtml(r[`action_${lang}`] || r.action_zh || "")}</div>
+            </div>
+          `).join("")}
+        </div>
+      `;
+  } else {
+    const recs = d[`recommendations_${lang}`] || d.recommendations_zh || [];
+    if (recs.length) {
+      recsBlock = `
+        <div class="diag-subsection">
+          <div class="diag-subsection-title">${escapeHtml(tFn("gc.diagnosis_recommendations"))}</div>
+          ${recs.map(r => `<div class="diag-rec-item">${escapeHtml(r)}</div>`).join("")}
+        </div>
+      `;
+    }
+  }
+
+  if (!rootCauseBlock && !evidenceBlock && !symptomsBlock && !recsBlock) return "";
+  return `
+      <div class="diagnosis-section">
+        ${rootCauseBlock}
+        ${evidenceBlock}
+        ${symptomsBlock}
+        ${recsBlock}
+      </div>
+    `;
+}
+
 export function renderReport(report) {
   const area = document.getElementById("gcReportArea");
   area.style.display = "";
@@ -37,64 +125,7 @@ export function renderReport(report) {
   const banner = formatHealthBanner(s, t);
 
   // 内存诊断区块 (root-cause oriented: 根因 → 证据 → 次生 → 建议)
-  const diagHtml = (() => {
-    const d = s.diagnosis;
-    if (!d) return "";
-    const lang = getLang();
-    // 新结构优先, fallback 到旧 findings/recommendations_zh/en (向后兼容)
-    const hasNew = d.evidence !== undefined && d.symptoms !== undefined;
-    const rootCauseHtml = d.root_cause ? `
-      <div class="diag-root-cause rc-category-${escapeHtml(d.root_cause.category || "")}">
-        <div class="rc-label">${escapeHtml(t("gc.root_cause.label"))}</div>
-        <div class="rc-title">${escapeHtml(d.root_cause[`label_${lang}`] || d.root_cause.label_zh || "")}</div>
-        ${d.root_cause.summary_zh || d.root_cause.summary_en ? `<div class="rc-summary">${escapeHtml(d.root_cause[`summary_${lang}`] || d.root_cause.summary_zh || "")}</div>` : ""}
-      </div>
-    ` : "";
-    const findings = hasNew ? [...d.evidence, ...d.symptoms] : (d.findings || []);
-    const findingsHtml = findings.length ? findings.map(f => `
-      <div class="diag-finding diag-severity-${escapeHtml(String(f.severity || ""))}">
-        <span class="diag-severity-tag">${t("gc.diagnosis_severity_" + f.severity)}</span>
-        <div class="diag-finding-body">
-          <div class="diag-finding-title">${escapeHtml(f["title_" + lang] || f.title_zh || "")}</div>
-          <div class="diag-finding-detail">${escapeHtml(f["detail_" + lang] || f.detail_zh || "")}</div>
-        </div>
-      </div>
-    `).join("") : "";
-    // 新结构: tiered recommendations; 旧结构: 平铺数组
-    let recsHtml = "";
-    if (Array.isArray(d.recommendations) && d.recommendations.length > 0) {
-      // tiered
-      const recs = d.recommendations;
-      recsHtml = `
-        <div class="diag-recommendations">
-          <div class="diag-recs-title">${t("gc.diagnosis_recommendations")}</div>
-          ${recs.map(r => `
-            <div class="diag-rec-item rec-tier-${escapeHtml(String(r.tier || ""))}">
-              <div class="diag-rec-action">${escapeHtml(r[`action_${lang}`] || r.action_zh || "")}</div>
-            </div>
-          `).join("")}
-        </div>
-      `;
-    } else {
-      const recs = d["recommendations_" + lang] || d.recommendations_zh || [];
-      if (recs.length) {
-        recsHtml = `
-          <div class="diag-recommendations">
-            <div class="diag-recs-title">${t("gc.diagnosis_recommendations")}</div>
-            ${recs.map(r => `<div class="diag-rec-item">${escapeHtml(r)}</div>`).join("")}
-          </div>
-        `;
-      }
-    }
-    if (!findingsHtml && !recsHtml && !rootCauseHtml) return "";
-    return `
-      <div class="diagnosis-section">
-        ${rootCauseHtml}
-        ${findingsHtml}
-        ${recsHtml}
-      </div>
-    `;
-  })();
+  const diagHtml = renderDiagnosisSection(s.diagnosis, t);
 
   // AI 正文
   const aiHtml = hasAi ? renderMarkdown(report.ai_conclusion)
