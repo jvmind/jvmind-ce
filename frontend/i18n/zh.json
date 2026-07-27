@@ -449,6 +449,8 @@
   "gc.diagnosis_severity_high": "严重",
   "gc.diagnosis_severity_medium": "警告",
   "gc.diagnosis_recommendations": "建议措施",
+  "gc.root_cause.label": "根因分析",
+  "gc.oom_first_at": "首个 OOM 风险点",
   "gc.diagnosis_collector_hint": "内存泄漏/溢出诊断仅适用于 Parallel 和 G1 收集器",
   "gc.event_raw_log": "原始日志",
   "gc.events_per_min": "事件/分钟",
