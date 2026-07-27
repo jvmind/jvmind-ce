@@ -289,7 +289,15 @@ def test_get_detail_response_strips_events_list(auth_client):
 
 
 def test_db_still_persists_events_for_llm_tool(auth_client):
-    """Internal DB row must keep full events so query_gc_events LLM tool still works."""
+    """Internal DB row must keep full events so query_gc_events LLM tool still works.
+
+    Note (0.1.11): ``memory.get_gc_report`` is now the canonical "internal"
+    path that returns the full payload (including ``stats.events``). The
+    HTTP-facing list/session/me-reports endpoints all strip ``events``
+    before serialisation, but the LLM tools
+    (``read_gc_report_tool``, ``query_events``) still call
+    ``get_gc_report`` directly and so continue to work.
+    """
     from app.core import state
     from react_agent.gc_analyzer import query_events
 
@@ -300,7 +308,7 @@ def test_db_still_persists_events_for_llm_tool(auth_client):
 
     agent = state._AGENTS[user_id]
     raw = agent.memory.get_gc_report(sid, rid)
-    # DB layer returns the full record (events included) for internal consumers.
+    # ``get_gc_report`` is the internal LLM-tool path; events must survive.
     assert isinstance(raw["stats"].get("events"), list)
     assert len(raw["stats"]["events"]) >= 11
 
@@ -312,6 +320,96 @@ def test_db_still_persists_events_for_llm_tool(auth_client):
     )
     assert "Matched:" in out
     assert "GC#" in out
+
+
+def test_session_load_strips_events_list(auth_client):
+    """GET /api/sessions/{sid} must NOT leak stats.events via embedded gc_reports."""
+    client, _user = auth_client
+    sid = _create_session(client)
+    _upload_gc(client, sid, "strip.log", _SAMPLE_LOG.read_bytes())
+
+    body = client.get(f"/api/sessions/{sid}").json()
+    assert "gc_reports" in body and len(body["gc_reports"]) == 1
+    report = body["gc_reports"][0]
+    assert isinstance(report.get("stats"), dict)
+    assert "events" not in report["stats"], (
+        "stats.events must be stripped from GET /api/sessions/{sid} response"
+    )
+    # Sanity: slim fields are present
+    assert report["stats"]["collector"] == "G1"
+    assert report["stats"]["events_total"] >= 11
+    assert isinstance(report["stats"]["by_category"], dict)
+    assert isinstance(report["stats"]["series"], list)
+    assert isinstance(report["stats"]["slowest"], list)
+
+
+def test_gc_reports_list_strips_events_list(auth_client):
+    """GET /api/sessions/{sid}/gc/reports must NOT leak stats.events in the list."""
+    client, _user = auth_client
+    sid = _create_session(client)
+    _upload_gc(client, sid, "strip.log", _SAMPLE_LOG.read_bytes())
+
+    listing = client.get(f"/api/sessions/{sid}/gc/reports").json()
+    assert len(listing["reports"]) == 1
+    report = listing["reports"][0]
+    assert isinstance(report.get("stats"), dict)
+    assert "events" not in report["stats"], (
+        "stats.events must be stripped from GET /api/sessions/{sid}/gc/reports"
+    )
+    assert report["stats"]["collector"] == "G1"
+    assert report["stats"]["events_total"] >= 11
+
+
+def test_me_reports_strips_gc_events_list(auth_client):
+    """GET /api/me/reports must NOT leak stats.events in GC entries."""
+    client, _user = auth_client
+    sid = _create_session(client)
+    _upload_gc(client, sid, "strip.log", _SAMPLE_LOG.read_bytes())
+
+    body = client.get("/api/me/reports").json()
+    gc_entries = [r for r in body["reports"] if r.get("type") == "gc"]
+    assert len(gc_entries) == 1
+    gc = gc_entries[0]
+    assert isinstance(gc.get("stats"), dict)
+    assert "events" not in gc["stats"], (
+        "stats.events must be stripped from /api/me/reports GC entries"
+    )
+    # Summary sub-dict still present
+    assert gc["summary"]["collector"] == "G1"
+    assert gc["summary"]["events_total"] >= 11
+
+
+def test_memory_layer_list_gc_reports_slimmed(auth_client):
+    """Defence-in-depth: the DB output layer must also strip events.
+
+    Even if a future caller forgets to apply the HTTP-layer helper, the
+    list method itself should not leak ``stats.events`` to the caller.
+    """
+    from app.core import state
+
+    client, _user = auth_client
+    user_id = client.cookies.get("uid") or "user_local"
+    sid = _create_session(client)
+    _upload_gc(client, sid, "strip.log", _SAMPLE_LOG.read_bytes())
+
+    agent = state._AGENTS[user_id]
+    listed = agent.memory.list_gc_reports(sid)
+    assert len(listed) == 1
+    assert "events" not in listed[0]["stats"], (
+        "memory.list_gc_reports must strip events at the DB output layer"
+    )
+
+    # And ``load()`` (used by GET /api/sessions/{sid}) must too
+    loaded = agent.memory.load(sid)
+    assert "gc_reports" in loaded
+    assert len(loaded["gc_reports"]) == 1
+    assert "events" not in loaded["gc_reports"][0]["stats"]
+
+    # ``list_all_reports`` (used by GET /api/me/reports) must also strip GC
+    all_reports = agent.memory.list_all_reports()
+    gc_all = [r for r in all_reports if r.get("type") == "gc"]
+    assert len(gc_all) == 1
+    assert "events" not in gc_all[0]["stats"]
 
 
 def test_export_json_strips_events_list(auth_client):

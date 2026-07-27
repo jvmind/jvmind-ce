@@ -16,6 +16,12 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
+# ``app.routes._stats_slim`` is intentionally a leaf module (no
+# ``react_agent`` imports) so we can safely import it here. Putting the
+# utility under ``app.routes`` keeps the HTTP-serialisation concern
+# co-located with the routes that produce the wire format.
+from app.routes._stats_slim import slim_gc_report, slim_gc_reports, slim_gc_stats
+
 from .db import SessionLocal
 from .models import (
     FactModel,
@@ -235,6 +241,11 @@ class DatabaseMemory:
             gc_reports = self._load_gc_reports(session_id)
             jstack_reports = self._load_jstack_reports(session_id)
             heapdump_reports = self._load_heapdump_reports(session_id)
+            # Defence-in-depth: ``_load_gc_reports`` already returns slimmed
+            # reports, but we re-apply ``slim_gc_reports`` here so the
+            # ``GET /api/sessions/{sid}`` contract is enforced even if a
+            # future override of ``_load_gc_reports`` forgets to strip events.
+            gc_reports = slim_gc_reports(gc_reports)
             return {
                 "id": s_id,
                 "title": s_title,
@@ -259,7 +270,7 @@ class DatabaseMemory:
                 .order_by(GCReportModel.created_at)
                 .all()
             )
-            return [
+            return slim_gc_reports([
                 {
                     "id": r.id,
                     "filename": r.filename,
@@ -270,7 +281,7 @@ class DatabaseMemory:
                     "created_at": r.created_at or "",
                 }
                 for r in rows
-            ]
+            ])
 
         finally:
             self.close()
@@ -488,7 +499,12 @@ class DatabaseMemory:
                     "stats": stats,
                     "has_ai": bool(r.ai_conclusion),
                 })
-            return out
+            # Strip the heavy per-event list from every entry's ``stats`` so
+            # the wire format returned by ``GET /api/sessions/{sid}/gc/reports``
+            # (and consumed by ``read_gc_report_tool(list)``) doesn't bloat
+            # the response. ``query_events`` / ``read_gc_report_tool(<rid>)``
+            # use ``get_gc_report`` which keeps the full payload.
+            return slim_gc_reports(out)
 
         finally:
             self.close()
@@ -542,6 +558,13 @@ class DatabaseMemory:
                         "total_pause_ms": stats.get("total_pause_ms"),
                     },
                 })
+            # Strip heavy per-event list from every GC entry above. jstack and
+            # heapdump entries don't carry an ``events`` list and pass through
+            # untouched. See ``app/routes/_stats_slim.py`` for the rationale.
+            out = [
+                slim_gc_report(r) if isinstance(r, dict) and r.get("type") == "gc" else r
+                for r in out
+            ]
             jstack_query = (
                 self.db.query(JStackReportModel, SessionModel)
                 .join(SessionModel, JStackReportModel.session_id == SessionModel.id)

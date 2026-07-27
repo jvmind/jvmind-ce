@@ -9,6 +9,7 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
 from app.core import helpers, state
+from app.routes._stats_slim import slim_gc_report, slim_gc_reports, slim_gc_stats
 from app.services.audit import log_audit
 from react_agent.gc_analyzer import analyze as gc_analyze
 from react_agent.upload_storage import save_uploaded_text
@@ -17,20 +18,10 @@ router = APIRouter(tags=["gc-reports"])
 _logger = logging.getLogger(__name__)
 
 
-def _stats_for_api(stats: dict) -> dict:
-    """Strip the heavy per-event list before sending stats over the wire.
-
-    ``stats["events"]`` holds every parsed GC event with its full raw log body,
-    which can be tens of MB for large uploads (especially ZGC). Frontend renderers
-    never consume it, and the LLM-side ``query_gc_events`` tool reads directly
-    from the DB row, so we can safely omit it from HTTP responses. ``events_total``
-    already gives the count for any UI that needs to display "N events parsed".
-    """
-    if not isinstance(stats, dict) or "events" not in stats:
-        return stats
-    slim = dict(stats)
-    slim.pop("events", None)
-    return slim
+# Backwards-compatible alias — the canonical implementation now lives in
+# ``app.routes._stats_slim`` so that ``react_agent.memory_db`` can reuse it
+# without creating a circular import.
+_stats_for_api = slim_gc_stats
 
 
 @router.get("/api/me/reports")
@@ -38,7 +29,19 @@ def list_my_reports(request: Request):
     user_id = helpers._get_current_user(request)
     agent = helpers._get_agent(user_id)
     if hasattr(agent.memory, "list_all_reports"):
-        return {"reports": agent.memory.list_all_reports()}
+        # GC reports in this list go through ``slim_gc_stats`` at the DB layer
+        # (see ``react_agent.memory_db.list_all_reports``), but we apply it
+        # here too as a defense-in-depth: if a future caller adds a GC-shaped
+        # entry directly, it still gets stripped. jstack/heapdump entries are
+        # untouched (they don't carry a heavy ``events`` list).
+        reports = agent.memory.list_all_reports()
+        out = []
+        for r in reports:
+            if isinstance(r, dict) and r.get("type") == "gc":
+                out.append(slim_gc_report(r))
+            else:
+                out.append(r)
+        return {"reports": out}
     return {"reports": []}
 
 
@@ -142,7 +145,10 @@ def list_gc_reports(request: Request, sid: str):
     helpers._check_analysis_feature(user_id, "gc")
     helpers._check_session_owner(sid, user_id)
     agent = helpers._get_agent(user_id)
-    return {"reports": agent.memory.list_gc_reports(sid)}
+    # ``slim_gc_reports`` is a defense-in-depth: the DB layer already strips
+    # ``stats.events`` (see ``react_agent.memory_db.list_gc_reports``), but
+    # applying it here too keeps the contract local to the HTTP layer.
+    return {"reports": slim_gc_reports(agent.memory.list_gc_reports(sid))}
 
 
 @router.get("/api/sessions/{sid}/gc/reports/{rid}")

@@ -5,6 +5,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 
 from app.core import helpers
+from app.routes._stats_slim import slim_gc_reports
 from app.schemas import CreateSessionReq, FactReq, RenameReq
 from app.services.audit import log_audit
 
@@ -36,7 +37,16 @@ def get_session(request: Request, sid: str):
     user_id = helpers._get_current_user(request)
     helpers._check_session_owner(sid, user_id)
     agent = helpers._get_agent(user_id)
-    return agent.memory.load(sid)
+    data = agent.memory.load(sid)
+    # GC reports embedded in the session payload are stripped of their heavy
+    # per-event list before serialization. ``slim_gc_reports`` is a no-op
+    # when ``gc_reports`` is absent or already slimmed. The DB layer
+    # (``react_agent.memory_db._load_gc_reports``) also applies the same
+    # transform — this is defense in depth.
+    if isinstance(data, dict) and "gc_reports" in data:
+        data = dict(data)
+        data["gc_reports"] = slim_gc_reports(data["gc_reports"])
+    return data
 
 
 @router.get("/{sid}/meta")
