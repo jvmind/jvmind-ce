@@ -19,96 +19,223 @@ export function appendSystemHint(html) {
   app.scrollToBottom();
 }
 
-// ---------- 渲染报告 ----------
-let _lastAiBodyScroll = 0;
+// ---------- Rules reference panel (collapsed by default) ----------
 
-// 内存诊断区块 (root-cause oriented: 根因 → 证据 → 次生 → 建议)
-// 拆成独立函数以便单元测试。返回 4 段独立 subsection 的 HTML:
-//   1. 根因 (root_cause)         — gc.root_cause.label
-//   2. 证据 (evidence)            — gc.diagnosis_evidence
-//   3. 次生表现 (symptoms)         — gc.diagnosis_symptoms
-//   4. 建议措施 (recommendations) — gc.diagnosis_recommendations
-// 新结构优先 (evidence / symptoms / recommendations 数组);
-// fallback 到旧结构 (findings + recommendations_zh/en 平铺).
-export function renderDiagnosisSection(d, tFn) {
-  if (!d) return "";
-  const lang = getLang();
-  const hasNew = d.evidence !== undefined && d.symptoms !== undefined;
-  const hasLegacyFindings = Array.isArray(d.findings) && d.findings.length > 0;
+const CATEGORY_ORDER = ["performance", "leak", "oom"];
 
-  const renderFinding = (f) => `
-      <div class="diag-finding diag-severity-${escapeHtml(String(f.severity || ""))}">
-        <span class="diag-severity-tag">${tFn("gc.diagnosis_severity_" + f.severity)}</span>
-        <div class="diag-finding-body">
-          <div class="diag-finding-title">${escapeHtml(f["title_" + lang] || f.title_zh || "")}</div>
-          <div class="diag-finding-detail">${escapeHtml(f["detail_" + lang] || f.detail_zh || "")}</div>
-        </div>
-      </div>
-    `;
+function _formatThreshold(ruleDef, lang) {
+  const th = ruleDef.thresholds || {};
+  if (th.medium != null && th.high != null && th.unit === "ratio") {
+    const m = (th.medium * 100).toFixed(0);
+    const h = (th.high * 100).toFixed(0);
+    return t("gc.rules.threshold_pair", { medium: `${m}${lang === "zh" ? "%" : "%"}`, high: `${h}${lang === "zh" ? "%" : "%"}` });
+  }
+  if (th.medium != null && th.high != null && th.unit === "ms") {
+    return t("gc.rules.threshold_pair", { medium: `${th.medium}ms`, high: `${th.high}ms` });
+  }
+  if (th.young_per_min || th.full_per_min) {
+    const parts = [];
+    if (th.young_per_min) {
+      parts.push(`Young: ${t("gc.rules.threshold_per_min", { value: th.young_per_min.high })}`);
+    }
+    if (th.full_per_min && th.full_per_min.high != null) {
+      parts.push(`Full: ${t("gc.rules.threshold_per_min", { value: th.full_per_min.high })}`);
+    }
+    return parts.join(" · ");
+  }
+  if (th.avg_reclaim_ratio != null) {
+    return `avg reclaim < ${(th.avg_reclaim_ratio * 100).toFixed(0)}%`;
+  }
+  if (th.n_count_high != null) {
+    return `≥ ${th.n_count_high} events → high`;
+  }
+  if (th.slope_mb_per_event != null) {
+    return `slope > ${th.slope_mb_per_event} MB/event`;
+  }
+  return "";
+}
 
-  // 1) 根因
-  const rootCauseBlock = d.root_cause ? `
-      <div class="diag-subsection diag-subsection-root rc-category-${escapeHtml(d.root_cause.category || "")}">
-        <div class="diag-subsection-title">${escapeHtml(tFn("gc.root_cause.label"))}</div>
-        <div class="rc-title">${escapeHtml(d.root_cause[`label_${lang}`] || d.root_cause.label_zh || "")}</div>
-        ${d.root_cause.summary_zh || d.root_cause.summary_en ? `<div class="rc-summary">${escapeHtml(d.root_cause[`summary_${lang}`] || d.root_cause.summary_zh || "")}</div>` : ""}
-      </div>
-    ` : "";
+function _formatPerCategoryThresholds(thresholds, lang) {
+  const lines = [];
+  for (const [cat, t2] of Object.entries(thresholds)) {
+    if (t2.medium != null && t2.high != null) {
+      lines.push(`${cat}: ${t2.medium}ms ${lang === "zh" ? "中" : "medium"} / ${t2.high}ms ${lang === "zh" ? "高" : "high"}`);
+    }
+  }
+  return lines.join(" · ");
+}
 
-  // 2) 证据 (新结构 evidence) / fallback 到旧 findings 合并
-  const evidenceList = hasNew ? (d.evidence || []) : (hasLegacyFindings ? d.findings : []);
-  const evidenceBlock = evidenceList.length ? `
-      <div class="diag-subsection">
-        <div class="diag-subsection-title">${escapeHtml(tFn("gc.diagnosis_evidence"))}</div>
-        ${evidenceList.map(renderFinding).join("")}
-      </div>
-    ` : "";
+function _categoryLabel(cat, lang) {
+  const key = `gc.rules.category_${cat}`;
+  const translated = t(key);
+  // Fall back to raw key if i18n missing
+  return translated === key ? cat : translated;
+}
 
-  // 3) 次生表现 (新结构 symptoms) — 仅在 evidence/symptoms 拆分时存在
-  const symptomsList = hasNew ? (d.symptoms || []) : [];
-  const symptomsBlock = symptomsList.length ? `
-      <div class="diag-subsection">
-        <div class="diag-subsection-title">${escapeHtml(tFn("gc.diagnosis_symptoms"))}</div>
-        ${symptomsList.map(renderFinding).join("")}
-      </div>
-    ` : "";
-
-  // 4) 建议措施 (新结构 tiered) / fallback 旧 recommendations_zh/en
-  let recsBlock = "";
-  if (Array.isArray(d.recommendations) && d.recommendations.length > 0) {
-    const recs = d.recommendations;
-    recsBlock = `
-        <div class="diag-subsection">
-          <div class="diag-subsection-title">${escapeHtml(tFn("gc.diagnosis_recommendations"))}</div>
-          ${recs.map(r => `
-            <div class="diag-rec-item rec-tier-${escapeHtml(String(r.tier || ""))}">
-              <div class="diag-rec-action">${escapeHtml(r[`action_${lang}`] || r.action_zh || "")}</div>
+export function renderRulesReference(ruleDefs, lang) {
+  if (!ruleDefs) ruleDefs = {};
+  const byCategory = {};
+  for (const [ruleId, def] of Object.entries(ruleDefs)) {
+    const cat = def.category || "perf";
+    if (!byCategory[cat]) byCategory[cat] = [];
+    byCategory[cat].push({ id: ruleId, def });
+  }
+  const sections = CATEGORY_ORDER
+    .filter(c => byCategory[c])
+    .map(cat => {
+      const items = byCategory[cat].map(({ id, def }) => {
+        const name = t(`gc.rules.defs.${id}.name`);
+        const desc = t(`gc.rules.defs.${id}.description`);
+        const thresholds = def.thresholds || {};
+        let thText = "";
+        if (id === "single_pause_long" && thresholds && thresholds.Young) {
+          thText = _formatPerCategoryThresholds(thresholds, lang);
+        } else {
+          thText = _formatThreshold(def, lang);
+        }
+        const applies = def.applies_to === "G1"
+          ? t("gc.rules.applies_g1")
+          : t("gc.rules.applies_all");
+        return `
+          <div class="diag-rules-item">
+            <div class="diag-rules-item-header">
+              <span class="diag-rule-id">${escapeHtml(id)}</span>
+              <span class="diag-rules-item-name">${escapeHtml(name)}</span>
+              <span class="diag-rules-item-applies">${escapeHtml(applies)}</span>
             </div>
-          `).join("")}
+            <div class="diag-rules-item-desc">${escapeHtml(desc)}</div>
+            ${thText ? `<div class="diag-rules-item-thresholds">${escapeHtml(thText)}</div>` : ""}
+          </div>
+        `;
+      }).join("");
+      return `
+        <div class="diag-rules-category">
+          <div class="diag-rules-category-title">${escapeHtml(_categoryLabel(cat, lang))}</div>
+          ${items}
         </div>
       `;
-  } else {
-    const recs = d[`recommendations_${lang}`] || d.recommendations_zh || [];
-    if (recs.length) {
-      recsBlock = `
-        <div class="diag-subsection">
-          <div class="diag-subsection-title">${escapeHtml(tFn("gc.diagnosis_recommendations"))}</div>
-          ${recs.map(r => `<div class="diag-rec-item">${escapeHtml(r)}</div>`).join("")}
+    }).join("");
+
+  return `
+    <div class="diag-rules-reference">
+      <div class="diag-rules-ref-header" data-act="toggle-rules-ref">
+        <span class="diag-rules-ref-chevron">▶</span>
+        <span class="diag-rules-ref-title">${escapeHtml(t("gc.rules.reference_title"))}</span>
+      </div>
+      <div class="diag-rules-ref-body" style="display:none;">
+        ${sections}
+      </div>
+    </div>
+  `;
+}
+
+// ---------- 渲染报告 ----------
+
+// Tier → icon name (lucide) + i18n key + CSS modifier
+const _TIER_META = {
+  immediate:  { icon: "zap",          i18n: "gc.rec_immediate_title",  cssClass: "tier-immediate"  },
+  short_term: { icon: "wrench",       i18n: "gc.rec_short_term_title", cssClass: "tier-short-term" },
+  tuning:     { icon: "sliders",      i18n: "gc.rec_tuning_title",     cssClass: "tier-tuning"     },
+  profiling:  { icon: "line-chart",   i18n: "gc.rec_profiling_title",  cssClass: "tier-profiling"  },
+};
+const _TIER_ORDER = ["immediate", "short_term", "tuning", "profiling"];
+
+function renderRootCause(rc, lang) {
+  if (!rc) return "";
+  const label = escapeHtml(rc[`label_${lang}`] || rc.label_zh || "");
+  const summary = escapeHtml(rc[`summary_${lang}`] || rc.summary_zh || "");
+  return `
+    <div class="diag-root-cause rc-category-${escapeHtml(rc.category || "")}">
+      <div class="rc-label">${escapeHtml(t("gc.root_cause.label"))}</div>
+      <div class="rc-title">${label}</div>
+      ${summary ? `<div class="rc-summary">${summary}</div>` : ""}
+    </div>
+  `;
+}
+
+function _renderFindingCard(f, lang) {
+  return `
+    <div class="diag-finding diag-severity-${escapeHtml(String(f.severity || ""))}">
+      <span class="diag-severity-tag">${t("gc.diagnosis_severity_" + f.severity)}</span>
+      <div class="diag-finding-body">
+        <div class="diag-finding-title">
+          ${escapeHtml(f[`title_${lang}`] || f.title_zh || "")}
+          ${f.rule ? `<span class="diag-rule-id" title="${escapeHtml(f.rule)}">${escapeHtml(f.rule)}</span>` : ""}
+        </div>
+        <div class="diag-finding-detail">${escapeHtml(f[`detail_${lang}`] || f.detail_zh || "")}</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderFindingList(findings, lang, kind) {
+  if (!findings || findings.length === 0) {
+    if (kind === "symptoms") {
+      return `
+        <div class="diag-section-block diag-symptoms-block">
+          <div class="diag-section-title">${escapeHtml(t("gc.symptoms_title"))}</div>
+          <div class="diag-empty">${escapeHtml(t("gc.symptoms_none"))}</div>
         </div>
       `;
     }
+    return "";
   }
-
-  if (!rootCauseBlock && !evidenceBlock && !symptomsBlock && !recsBlock) return "";
+  const titleKey = kind === "evidence" ? "gc.evidence_title" : "gc.symptoms_title";
   return `
-      <div class="diagnosis-section">
-        ${rootCauseBlock}
-        ${evidenceBlock}
-        ${symptomsBlock}
-        ${recsBlock}
+    <div class="diag-section-block diag-${kind}-block">
+      <div class="diag-section-title">${escapeHtml(t(titleKey))}</div>
+      ${findings.map(f => _renderFindingCard(f, lang)).join("")}
+    </div>
+  `;
+}
+
+function renderTieredRecommendations(recs, lang) {
+  if (!recs || recs.length === 0) {
+    return `
+      <div class="diag-section-block diag-recs-block">
+        <div class="diag-section-title">${escapeHtml(t("gc.diagnosis_recommendations"))}</div>
+        <div class="diag-empty">${escapeHtml(t("gc.rec_empty"))}</div>
       </div>
     `;
+  }
+  const groups = {};
+  for (const r of recs) {
+    if (!groups[r.tier]) groups[r.tier] = [];
+    groups[r.tier].push(r);
+  }
+  const sections = _TIER_ORDER.filter(tier => groups[tier] && groups[tier].length > 0)
+    .map(tier => {
+      const meta = _TIER_META[tier];
+      const triggeredLabel = escapeHtml(t("gc.rec_triggered_by"));
+      const items = groups[tier].map(r => {
+        const action = escapeHtml(r[`action_${lang}`] || r.action_zh || "");
+        const triggered = (r.triggered_by || []).map(escapeHtml).join(", ");
+        return `
+          <div class="diag-rec-item ${meta.cssClass}">
+            <div class="diag-rec-action">${action}</div>
+            ${triggered ? `<div class="diag-rec-triggered"><span class="diag-rec-triggered-label">${triggeredLabel}:</span> ${triggered}</div>` : ""}
+          </div>
+        `;
+      }).join("");
+      return `
+        <div class="diag-rec-tier ${meta.cssClass}">
+          <div class="diag-rec-tier-header">
+            <span class="diag-rec-tier-icon">${ico(meta.icon)}</span>
+            <span class="diag-rec-tier-title">${escapeHtml(t(meta.i18n))}</span>
+          </div>
+          <div class="diag-rec-tier-items">${items}</div>
+        </div>
+      `;
+    }).join("");
+  return `
+    <div class="diag-section-block diag-recs-block">
+      <div class="diag-section-title">${escapeHtml(t("gc.diagnosis_recommendations"))}</div>
+      ${sections}
+    </div>
+  `;
 }
+
+let _lastAiBodyScroll = 0;
 
 export function renderReport(report) {
   const area = document.getElementById("gcReportArea");
@@ -124,8 +251,26 @@ export function renderReport(report) {
   // 健康横幅
   const banner = formatHealthBanner(s, t);
 
-  // 内存诊断区块 (root-cause oriented: 根因 → 证据 → 次生 → 建议)
-  const diagHtml = renderDiagnosisSection(s.diagnosis, t);
+  // 内存诊断区块 (root-cause oriented: 根因 → 证据 → 次生 → 建议 → 规则说明)
+  const diagHtml = (() => {
+    const d = s.diagnosis;
+    if (!d) return "";
+    const lang = getLang();
+    const rootCauseHtml = renderRootCause(d.root_cause, lang);
+    const evidenceHtml = renderFindingList(d.evidence || [], lang, "evidence");
+    const symptomsHtml = renderFindingList(d.symptoms || [], lang, "symptoms");
+    const recsHtml = renderTieredRecommendations(d.recommendations || [], lang);
+    const rulesRefHtml = renderRulesReference(d.rule_definitions || {}, lang);
+    return `
+      <div class="diagnosis-section">
+        ${rootCauseHtml}
+        ${evidenceHtml}
+        ${symptomsHtml}
+        ${recsHtml}
+        ${rulesRefHtml}
+      </div>
+    `;
+  })();
 
   // AI 正文
   const aiHtml = hasAi ? renderMarkdown(report.ai_conclusion)
@@ -347,6 +492,19 @@ export function renderReport(report) {
     if (aiHeader) {
       const section = aiHeader.closest('.ai-section');
       if (section) section.classList.toggle('collapsed');
+    }
+    const rulesRefHeader = ev.target.closest('[data-act="toggle-rules-ref"]');
+    if (rulesRefHeader) {
+      const ref = rulesRefHeader.closest('.diag-rules-reference');
+      if (ref) {
+        const body = ref.querySelector('.diag-rules-ref-body');
+        const chevron = ref.querySelector('.diag-rules-ref-chevron');
+        if (body) {
+          const isOpen = body.style.display !== 'none';
+          body.style.display = isOpen ? 'none' : '';
+          if (chevron) chevron.textContent = isOpen ? '▶' : '▼';
+        }
+      }
     }
   };
 }

@@ -688,32 +688,6 @@
     background: rgba(128,128,128,0.06);
     border: 1px solid rgba(128,128,128,0.15);
   }
-  .diag-subsection { margin-top: 10px; }
-  .diag-subsection:first-child { margin-top: 0; }
-  .diag-subsection-title {
-    font-size: 12px;
-    font-weight: 600;
-    margin-bottom: 6px;
-    color: var(--text-dim);
-    text-transform: none;
-    letter-spacing: 0.02em;
-  }
-  .diag-subsection-root { padding: 4px 0 2px; }
-  .diag-subsection-root .rc-title {
-    font-size: 15px;
-    font-weight: 700;
-    color: var(--text);
-    line-height: 1.3;
-  }
-  .diag-subsection-root .rc-summary {
-    font-size: 12px;
-    color: var(--text-dim);
-    margin-top: 4px;
-    line-height: 1.4;
-  }
-  .diag-subsection-root.rc-category-performance .rc-title { color: var(--red, #f85149); }
-  .diag-subsection-root.rc-category-memory_leak .rc-title { color: var(--red, #f85149); }
-  .diag-subsection-root.rc-category-oom .rc-title { color: var(--red, #f85149); }
   .diag-finding {
     display: flex;
     align-items: flex-start;
@@ -738,8 +712,211 @@
   .diag-finding-title { font-weight: 600; }
   .diag-finding-detail { color: var(--text-dim); margin-top: 2px; }
   .diag-finding-body { flex: 1; min-width: 0; }
+  .diag-recommendations { margin-top: 10px; }
+  .diag-recs-title { font-size: 12px; font-weight: 600; margin-bottom: 4px; color: var(--text-dim); }
   .diag-rec-item { font-size: 12px; color: var(--text-dim); padding: 2px 0; padding-left: 12px; position: relative; }
   .diag-rec-item::before { content: "•"; position: absolute; left: 2px; color: var(--text-dim); }
+
+  /* ---------- Root Cause Banner ---------- */
+  .diag-root-cause {
+    padding: 10px 12px;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    border: 1px solid;
+    background: rgba(128,128,128,0.06);
+  }
+  .diag-root-cause.rc-category-oom,
+  .diag-root-cause.rc-category-leak {
+    border-color: rgba(248,81,73,0.4);
+    background: rgba(248,81,73,0.08);
+    color: var(--red);
+  }
+  .diag-root-cause.rc-category-performance {
+    border-color: rgba(210,153,34,0.4);
+    background: rgba(210,153,34,0.08);
+    color: var(--orange);
+  }
+  .diag-root-cause.rc-category-healthy {
+    border-color: rgba(63,185,80,0.4);
+    background: rgba(63,185,80,0.08);
+    color: var(--green);
+  }
+  .diag-root-cause .rc-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    opacity: 0.7;
+    margin-bottom: 2px;
+  }
+  .diag-root-cause .rc-title {
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+  .diag-root-cause .rc-summary {
+    font-size: 12px;
+    margin-top: 4px;
+    opacity: 0.85;
+    line-height: 1.4;
+  }
+
+  /* ---------- Section Blocks (evidence / symptoms / recs) ---------- */
+  .diag-section-block {
+    margin-top: 10px;
+    padding-top: 6px;
+  }
+  .diag-section-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .diag-empty {
+    font-size: 12px;
+    color: var(--text-dim);
+    padding: 4px 0;
+    font-style: italic;
+  }
+
+  /* ---------- Tiered Recommendations ---------- */
+  .diag-rec-tier {
+    margin-bottom: 10px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border-left: 3px solid var(--text-dim);
+    background: rgba(128,128,128,0.04);
+  }
+  .diag-rec-tier.tier-immediate  { border-left-color: var(--red);    background: rgba(248,81,73,0.06); }
+  .diag-rec-tier.tier-short-term { border-left-color: var(--orange); background: rgba(210,153,34,0.06); }
+  .diag-rec-tier.tier-tuning     { border-left-color: #58a6ff;        background: rgba(88,166,255,0.06); }
+  .diag-rec-tier.tier-profiling  { border-left-color: var(--text-dim); background: rgba(128,128,128,0.06); }
+  .diag-rec-tier-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+  .diag-rec-tier-icon {
+    display: inline-flex;
+    width: 14px;
+    height: 14px;
+  }
+  .diag-rec-tier-icon svg { width: 14px; height: 14px; }
+  .diag-rec-tier.tier-immediate  .diag-rec-tier-icon { color: var(--red); }
+  .diag-rec-tier.tier-short-term .diag-rec-tier-icon { color: var(--orange); }
+  .diag-rec-tier.tier-tuning     .diag-rec-tier-icon { color: #58a6ff; }
+  .diag-rec-tier-items .diag-rec-item {
+    padding: 4px 0 4px 12px;
+    font-size: 12px;
+    color: var(--text);
+    position: relative;
+    line-height: 1.5;
+  }
+  .diag-rec-tier-items .diag-rec-item::before {
+    content: "•";
+    position: absolute;
+    left: 0;
+    color: var(--text-dim);
+  }
+  .diag-rec-action { color: var(--text); }
+  .diag-rec-triggered {
+    margin-top: 2px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .diag-rec-triggered-label { font-weight: 600; }
+
+  /* ---------- Rule ID pill (inline next to each finding title) ---------- */
+  .diag-rule-id {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 8px;
+    border-radius: 10px;
+    background: rgba(128,128,128,0.15);
+    color: var(--text-dim);
+    font-family: var(--mono-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 10px;
+    font-weight: 500;
+    line-height: 1.5;
+    vertical-align: middle;
+    cursor: help;
+  }
+  .diag-rule-id:hover { background: rgba(128,128,128,0.25); }
+
+  /* ---------- Rules Reference Panel (collapsed by default) ---------- */
+  .diag-rules-reference {
+    margin-top: 12px;
+    border-top: 1px solid rgba(128,128,128,0.15);
+    padding-top: 8px;
+  }
+  .diag-rules-ref-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    padding: 4px 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    user-select: none;
+  }
+  .diag-rules-ref-header:hover { color: var(--text); }
+  .diag-rules-ref-chevron {
+    display: inline-block;
+    width: 12px;
+    font-size: 10px;
+    transition: transform 0.15s;
+  }
+  .diag-rules-ref-title { flex: 1; }
+  .diag-rules-ref-body {
+    margin-top: 8px;
+    padding-left: 4px;
+  }
+  .diag-rules-category { margin-bottom: 12px; }
+  .diag-rules-category-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 6px;
+  }
+  .diag-rules-item {
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    border-radius: 6px;
+    background: rgba(128,128,128,0.04);
+    border: 1px solid rgba(128,128,128,0.08);
+  }
+  .diag-rules-item-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+    flex-wrap: wrap;
+  }
+  .diag-rules-item-name { font-weight: 600; font-size: 13px; }
+  .diag-rules-item-applies {
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-left: auto;
+  }
+  .diag-rules-item-desc {
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+  .diag-rules-item-thresholds {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--text-dim);
+    font-family: var(--mono-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  }
 
   /* ---------- Collapsible AI Section ---------- */
   .ai-section { margin-top: 14px; }
