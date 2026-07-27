@@ -36,12 +36,22 @@ export function renderReport(report) {
   // 健康横幅
   const banner = formatHealthBanner(s, t);
 
-  // 内存诊断区块
+  // 内存诊断区块 (root-cause oriented: 根因 → 证据 → 次生 → 建议)
   const diagHtml = (() => {
     const d = s.diagnosis;
-    if (!d || !d.findings || !d.findings.length) return "";
+    if (!d) return "";
     const lang = getLang();
-    const findingsHtml = d.findings.map(f => `
+    // 新结构优先, fallback 到旧 findings/recommendations_zh/en (向后兼容)
+    const hasNew = d.evidence !== undefined && d.symptoms !== undefined;
+    const rootCauseHtml = d.root_cause ? `
+      <div class="diag-root-cause rc-category-${escapeHtml(d.root_cause.category || "")}">
+        <div class="rc-label">${escapeHtml(t("gc.root_cause.label"))}</div>
+        <div class="rc-title">${escapeHtml(d.root_cause[`label_${lang}`] || d.root_cause.label_zh || "")}</div>
+        ${d.root_cause.summary_zh || d.root_cause.summary_en ? `<div class="rc-summary">${escapeHtml(d.root_cause[`summary_${lang}`] || d.root_cause.summary_zh || "")}</div>` : ""}
+      </div>
+    ` : "";
+    const findings = hasNew ? [...d.evidence, ...d.symptoms] : (d.findings || []);
+    const findingsHtml = findings.length ? findings.map(f => `
       <div class="diag-finding diag-severity-${escapeHtml(String(f.severity || ""))}">
         <span class="diag-severity-tag">${t("gc.diagnosis_severity_" + f.severity)}</span>
         <div class="diag-finding-body">
@@ -49,16 +59,37 @@ export function renderReport(report) {
           <div class="diag-finding-detail">${escapeHtml(f["detail_" + lang] || f.detail_zh || "")}</div>
         </div>
       </div>
-    `).join("");
-    const recs = d["recommendations_" + lang] || d.recommendations_zh || [];
-    const recsHtml = recs.length ? `
-      <div class="diag-recommendations">
-        <div class="diag-recs-title">${t("gc.diagnosis_recommendations")}</div>
-        ${recs.map(r => `<div class="diag-rec-item">${escapeHtml(r)}</div>`).join("")}
-      </div>
-    ` : "";
+    `).join("") : "";
+    // 新结构: tiered recommendations; 旧结构: 平铺数组
+    let recsHtml = "";
+    if (Array.isArray(d.recommendations) && d.recommendations.length > 0) {
+      // tiered
+      const recs = d.recommendations;
+      recsHtml = `
+        <div class="diag-recommendations">
+          <div class="diag-recs-title">${t("gc.diagnosis_recommendations")}</div>
+          ${recs.map(r => `
+            <div class="diag-rec-item rec-tier-${escapeHtml(String(r.tier || ""))}">
+              <div class="diag-rec-action">${escapeHtml(r[`action_${lang}`] || r.action_zh || "")}</div>
+            </div>
+          `).join("")}
+        </div>
+      `;
+    } else {
+      const recs = d["recommendations_" + lang] || d.recommendations_zh || [];
+      if (recs.length) {
+        recsHtml = `
+          <div class="diag-recommendations">
+            <div class="diag-recs-title">${t("gc.diagnosis_recommendations")}</div>
+            ${recs.map(r => `<div class="diag-rec-item">${escapeHtml(r)}</div>`).join("")}
+          </div>
+        `;
+      }
+    }
+    if (!findingsHtml && !recsHtml && !rootCauseHtml) return "";
     return `
       <div class="diagnosis-section">
+        ${rootCauseHtml}
         ${findingsHtml}
         ${recsHtml}
       </div>

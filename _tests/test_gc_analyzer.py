@@ -352,67 +352,87 @@ def _make_full_gc(cause, after_pct, id_=1):
     )
 
 
-def test_oom_risk_g1_single_full_gc_is_medium_not_high():
-    """单个 G1 Full GC（即使伴随高堆占用）不应直接判 OOM High。
-    System.gc() 这类主动触发常见，不应误报。"""
+def test_oom_risk_g1_single_full_gc_alone_is_not_oom():
+    """新原则: 单次 G1 Full GC 不算 OOM (需要 Full GC + 无法回收才 = oom)。
+    System.gc() 这类主动触发常见, 不应误报; 单次 Full GC + 正常回收 = performance。"""
     events = [
-        _make_full_gc("System.gc()", 40.0),  # 单次 Full GC
+        _make_full_gc("System.gc()", 40.0),  # 单次 Full GC, post-GC 40% (回收正常)
     ]
     result = _diagnose_memory(
         events, "G1", heap_max_mb=4000, max_heap_usage_pct=70.0,
         avg_heap_usage_pct=50.0,
         by_category={"Full": {"count": 1}, "Young": {"count": 100}},
     )
-    rules_severity = [(f["rule"], f["severity"]) for f in result["findings"]]
+    all_findings = result["evidence"] + result["symptoms"]
+    rules_severity = [(f["rule"], f["severity"]) for f in all_findings]
     assert ("g1_full_gc", "medium") in rules_severity, rules_severity
-    assert result["oom_risk"] != "high", result
+    # g1_full_gc 单条 → performance (不直接 = oom)
+    assert result["oom_risk"] == "none", result
+    assert result["root_cause"]["category"] == "performance", result
 
 
-def test_oom_risk_g1_sustained_full_gc_is_high():
-    """G1 多次 Full GC（≥3）才是真正的高风险信号。"""
-    events = [_make_full_gc("Allocation Failure", 60.0, id_=i) for i in range(1, 6)]
-    result = _diagnose_memory(
-        events, "G1", heap_max_mb=4000, max_heap_usage_pct=85.0,
-        avg_heap_usage_pct=70.0,
-        by_category={"Full": {"count": 5}},
-    )
-    rules_severity = [(f["rule"], f["severity"]) for f in result["findings"]]
-    assert ("g1_full_gc", "high") in rules_severity, rules_severity
-    assert result["oom_risk"] == "high", result
+def test_oom_risk_g1_full_gc_with_reclaim_low_promotes_to_oom():
+    """新原则: g1_full_gc + reclaim_low 同时触发 → oom (Full GC + 无法回收)。"""
+    # 5 Full GC @ 98% post-GC → reclaim ~2% → reclaim_low high
+    events = []
+    for i in range(1, 6):
+        ev = _make_full_gc("Allocation Failure", 98.0, id_=i)  # 98% post-GC, reclaim 2%
+        events.append(ev)
+    stats = {
+        "by_category": {
+            "Full": {
+                "count": 5, "total_pause_ms": 1000.0,
+                "avg_pause_ms": 200.0, "max_pause_ms": 200.0,
+                "p95_pause_ms": 200.0, "p99_pause_ms": 200.0,
+                "avg_freed_mb": 80.0,  # 2% of 4000
+                "total_freed_mb": 400.0,
+            },
+        },
+    }
+    result = _diagnose_memory(events, "G1", stats)
+    assert result["oom_risk"] == "high", f"g1_full_gc + reclaim_low → oom_risk=high expected, got {result['oom_risk']}"
+    assert result["root_cause"]["category"] == "oom", result
 
 
-def test_oom_risk_single_full_gc_with_high_heap_is_medium_not_high():
-    """平均堆占用 95% + 单次 Full GC 不应判 OOM High（之前是 High）。"""
+def test_oom_risk_single_full_gc_with_high_heap_does_not_fire_high():
+    """单次 Full GC + 高堆占用, 不算 OOM (新原则: 需要 reclaim 也低 才是 OOM)。"""
     events = [
         GCEvent(id="y1", uptime_sec=5.0, duration_ms=50,
                 category="Young", cause="G1 Evacuation Pause",
                 heap_before_mb=3800, heap_after_mb=3700, heap_total_mb=4000,
                 is_concurrent=False),
-        _make_full_gc("Allocation Failure", 92.5, id_=2),
+        _make_full_gc("Allocation Failure", 60.0, id_=2),  # 60% post-GC, reclaim normal
     ]
     result = _diagnose_memory(
         events, "G1", heap_max_mb=4000, max_heap_usage_pct=96.0,
         avg_heap_usage_pct=95.0,
         by_category={"Young": {"count": 1}, "Full": {"count": 1}},
     )
-    oom_critical_findings = [f for f in result["findings"] if f["rule"] == "oom_critical"]
-    assert oom_critical_findings, "oom_critical finding expected"
-    assert oom_critical_findings[0]["severity"] == "medium", oom_critical_findings[0]
+    high_findings = [f for f in result["evidence"] + result["symptoms"] if f["severity"] == "high"]
+    assert not high_findings, f"unexpected high findings: {high_findings}"
+    assert result["oom_risk"] == "none", result
+    assert result["root_cause"]["category"] == "performance", result
 
 
-def test_oom_risk_max_heap_98_is_high():
-    """最大堆占用 ≥ 98% 是真正的 OOM 临界，无论 Full GC 数量。"""
-    events = [
-        _make_full_gc("Allocation Failure", 99.0, id_=1),
-    ]
-    result = _diagnose_memory(
-        events, "G1", heap_max_mb=4000, max_heap_usage_pct=98.0,
-        avg_heap_usage_pct=90.0,
-        by_category={"Full": {"count": 1}},
-    )
-    oom_critical_findings = [f for f in result["findings"] if f["rule"] == "oom_critical"]
-    assert oom_critical_findings[0]["severity"] == "high", oom_critical_findings[0]
-    assert result["oom_risk"] == "high", result
+def test_oom_risk_max_heap_98_with_low_reclaim_triggers_oom():
+    """新原则: max_heap ≥ 98% + reclaim < 5% → oom (满足两个条件: Full GC + 无法回收)。"""
+    events = [_make_full_gc("Allocation Failure", 99.0, id_=i) for i in range(1, 4)]
+    stats = {
+        "by_category": {
+            "Full": {
+                "count": 3, "total_pause_ms": 600.0,
+                "avg_pause_ms": 200.0, "max_pause_ms": 200.0,
+                "p95_pause_ms": 200.0, "p99_pause_ms": 200.0,
+                "avg_freed_mb": 40.0,  # 1% of 4000
+                "total_freed_mb": 120.0,
+            },
+        },
+        "max_heap_usage_pct": 98.0,
+    }
+    result = _diagnose_memory(events, "G1", stats)
+    # reclaim_low high (avg 1%) → oom_risk=high → root_cause oom
+    assert result["oom_risk"] == "high", f"got {result}"
+    assert result["root_cause"]["category"] == "oom", result
 
 
 def test_oom_risk_non_parallel_g1_collector_runs_diagnosis():
@@ -428,40 +448,71 @@ def test_oom_risk_non_parallel_g1_collector_runs_diagnosis():
     assert result["oom_risk"] == "none", result
 
 
-def test_oom_risk_serial_high_heap_with_full_gc_is_flagged():
-    """Serial collector：高平均堆占用（≥95%）+ Full GC → 应触发 oom_critical。"""
+def test_oom_risk_serial_high_heap_with_low_reclaim_triggers_oom():
+    """Serial collector: 3+ Full GC + reclaim < 5% → reclaim_low high → oom。"""
     events = [
         GCEvent(id="y1", uptime_sec=5.0, duration_ms=80,
                 category="Young", cause="Allocation Failure",
                 heap_before_mb=3800, heap_after_mb=3700, heap_total_mb=4000,
                 is_concurrent=False),
-        _make_full_gc("Allocation Failure", 96.0, id_=2),
+        _make_full_gc("Allocation Failure", 99.0, id_=2),  # post-GC 99% reclaim 1%
+        _make_full_gc("Allocation Failure", 99.0, id_=3),
+        _make_full_gc("Allocation Failure", 99.0, id_=4),
+    ]
+    stats = {
+        "by_category": {
+            "Young": {"count": 1, "total_pause_ms": 80.0, "avg_pause_ms": 80.0,
+                       "max_pause_ms": 80.0, "p95_pause_ms": 80.0, "p99_pause_ms": 80.0,
+                       "avg_freed_mb": 100.0, "total_freed_mb": 100.0},
+            "Full": {"count": 3, "total_pause_ms": 600.0, "avg_pause_ms": 200.0,
+                      "max_pause_ms": 200.0, "p95_pause_ms": 200.0, "p99_pause_ms": 200.0,
+                      "avg_freed_mb": 40.0, "total_freed_mb": 120.0},  # 1% reclaim
+        },
+        "max_heap_usage_pct": 97.0,
+        "avg_heap_usage_pct": 96.0,
+    }
+    result = _diagnose_memory(events, "Serial", stats)
+    # reclaim_low high → oom
+    oom_findings = [f for f in result["evidence"] if f["rule"] == "reclaim_low"]
+    assert oom_findings, f"expected reclaim_low finding, got {result}"
+    assert oom_findings[0]["severity"] == "high", oom_findings[0]
+
+
+def test_serial_high_heap_with_normal_reclaim_is_performance():
+    """Serial collector: max_heap ≥ 98% 但 reclaim 正常 (60% post-GC) → 不算 OOM。"""
+    events = [
+        GCEvent(id="y1", uptime_sec=5.0, duration_ms=80,
+                category="Young", cause="Allocation Failure",
+                heap_before_mb=3800, heap_after_mb=3700, heap_total_mb=4000,
+                is_concurrent=False),
+        _make_full_gc("Allocation Failure", 60.0, id_=2),  # 60% post-GC normal reclaim
     ]
     result = _diagnose_memory(
         events, "Serial", heap_max_mb=4000, max_heap_usage_pct=97.0,
         avg_heap_usage_pct=96.0,
         by_category={"Young": {"count": 1}, "Full": {"count": 1}},
     )
-    oom_findings = [f for f in result["findings"] if f["rule"] == "oom_critical"]
-    assert oom_findings, result
-    assert oom_findings[0]["severity"] in ("medium", "high"), oom_findings[0]
+    # reclaim 正常, g1_full_gc 单独 = performance, no OOM
+    assert result["oom_risk"] == "none", f"got {result}"
 
 
-def test_serial_reclaim_declining_is_diagnosed():
-    """Serial：连续 Full GC 后堆下不来 → 应触发 reclaim/heap_floor 诊断。"""
-    # 堆下不来 + 持续高位 → heap_floor_rising 触发
+def test_serial_reclaim_low_with_recovery_is_leak():
+    """Serial: 连续 Full GC 后堆下不来 (post-GC 99% all 3) → reclaim_low high → oom."""
     events = [
-        _make_full_gc("Allocation Failure", 80.0, id_=1),
-        _make_full_gc("Allocation Failure", 85.0, id_=2),
-        _make_full_gc("Allocation Failure", 90.0, id_=3),
+        _make_full_gc("Allocation Failure", 99.0, id_=i) for i in range(1, 4)
     ]
-    result = _diagnose_memory(
-        events, "Serial", heap_max_mb=100, max_heap_usage_pct=92.0,
-        avg_heap_usage_pct=85.0,
-        by_category={"Full": {"count": 3}},
-    )
-    rules = [f["rule"] for f in result["findings"]]
-    assert "reclaim_declining" in rules or "post_gc_high_usage" in rules or "heap_floor_rising" in rules, result
+    stats = {
+        "by_category": {
+            "Full": {
+                "count": 3, "total_pause_ms": 600.0, "avg_pause_ms": 200.0,
+                "max_pause_ms": 200.0, "p95_pause_ms": 200.0, "p99_pause_ms": 200.0,
+                "avg_freed_mb": 40.0, "total_freed_mb": 120.0,  # 1% reclaim
+            },
+        },
+    }
+    result = _diagnose_memory(events, "Serial", stats)
+    rules = [f["rule"] for f in result["evidence"] + result["symptoms"]]
+    assert "reclaim_low" in rules, f"got {rules}"
 
 
 def main():

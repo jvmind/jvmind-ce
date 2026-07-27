@@ -366,6 +366,20 @@ export function formatHealthBanner(stats, t) {
     if (diag.oom_risk && diag.oom_risk !== "none") {
       metricText.push(`${t("gc.diagnosis_oom_risk")}: ${t("gc.diagnosis_risk_" + diag.oom_risk)}`);
     }
+    // Show first OOM candidate timestamp if available
+    if (diag.oom_candidates && diag.oom_candidates.length > 0) {
+      const first = diag.oom_candidates[0];
+      let timeText = "—";
+      if (first.absolute_epoch_ms != null && stats.start_epoch_ms != null) {
+        timeText = formatEpoch(first.absolute_epoch_ms, stats.start_epoch_ms);
+      } else if (first.uptime_sec != null) {
+        timeText = `+${Number(first.uptime_sec).toFixed(3)}s`;
+      }
+      // Only add if the i18n key exists
+      if (typeof t === "function" && (() => { try { return t("gc.oom_first_at"); } catch { return null; } })()) {
+        metricText.push(`${t("gc.oom_first_at")}: ${timeText}`);
+      }
+    }
   }
 
   const detailHtml = metricText
