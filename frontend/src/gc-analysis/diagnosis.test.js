@@ -76,10 +76,7 @@ describe('renderRulesReference (SaaS panel)', () => {
     const cats = w.querySelectorAll('.diag-rules-category');
     expect(cats.length).toBe(3);
     const titles = [...cats].map(c => c.querySelector('.diag-rules-category-title')?.textContent);
-    // Note: SaaS bug — i18n key is `category_perf` but code looks up
-    // `category_performance`, so it falls back to raw key "performance".
-    // We only assert order: oom/leak have proper zh labels.
-    expect(titles[0]).toBe('performance');
+    expect(titles[0]).toContain('通用 - 性能');
     expect(titles[1]).toContain('通用 - 泄漏');
     expect(titles[2]).toContain('通用 - OOM');
   });

@@ -464,7 +464,7 @@
   "gc.rules.applies_g1": "仅 G1 收集器",
   "gc.rules.threshold_pair": "中 {medium} / 高 {high}",
   "gc.rules.threshold_per_min": "{value} 次/分钟",
-  "gc.rules.category_perf": "通用 - 性能",
+  "gc.rules.category_performance": "通用 - 性能",
   "gc.rules.category_leak": "通用 - 泄漏",
   "gc.rules.category_oom": "通用 - OOM",
   "gc.rules.defs.throughput_low.name": "吞吐率过低",

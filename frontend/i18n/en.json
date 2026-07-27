@@ -469,7 +469,7 @@
   "gc.rules.applies_g1": "G1 only",
   "gc.rules.threshold_pair": "medium {medium} / high {high}",
   "gc.rules.threshold_per_min": "{value}/min",
-  "gc.rules.category_perf": "Universal - Performance",
+  "gc.rules.category_performance": "Universal - Performance",
   "gc.rules.category_leak": "Universal - Leak",
   "gc.rules.category_oom": "Universal - OOM",
   "gc.rules.defs.throughput_low.name": "Low throughput",
