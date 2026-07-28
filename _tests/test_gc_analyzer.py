@@ -515,6 +515,158 @@ def test_serial_reclaim_low_with_recovery_is_leak():
     assert "reclaim_low" in rules, f"got {rules}"
 
 
+def test_g1_full_gc_heap_dump_initiated_recognized():
+    """回归: G1 Full GC 由 Heap Dump Initiated GC (jmap -dump / jcmd GC.heap_dump)
+    触发时, 不应误报为堆压力信号. detail 应明确说明是手动触发, 不是 heap 容量问题.
+    """
+    ev = GCEvent(
+        id=1, uptime_sec=10.0, duration_ms=250, category="Full",
+        cause="Heap Dump Initiated GC",
+        heap_before_mb=4096, heap_after_mb=2048, heap_total_mb=4096,
+        is_concurrent=False,
+        raw_body="[gc] GC(1) Pause Full (Heap Dump Initiated GC) 4096M->2048M(4096M) 250.0ms",
+    )
+    stats = {
+        "by_category": {
+            "Full": {
+                "count": 1, "total_pause_ms": 250.0,
+                "avg_pause_ms": 250.0, "max_pause_ms": 250.0,
+                "p95_pause_ms": 250.0, "p99_pause_ms": 250.0,
+                "avg_freed_mb": 2048.0, "total_freed_mb": 2048.0,
+            },
+        },
+    }
+    result = _diagnose_memory([ev], "G1", stats)
+    g1_full_findings = [f for f in result["evidence"] + result["symptoms"] if f["rule"] == "g1_full_gc"]
+    assert g1_full_findings, f"expected g1_full_gc, got findings: {result}"
+    f = g1_full_findings[0]
+    detail_en = f["detail_en"].lower()
+    detail_zh = f["detail_zh"]
+    # detail 必须提到 heap dump (手动触发), 不应误报为堆压力
+    assert "heap dump" in detail_en or "manual" in detail_en, \
+        f"detail 应说明是手动触发 (heap dump), 但写的是: {f}"
+    # 不应该再说 "insufficient heap" 或 "humongous"
+    assert "insufficient" not in detail_en
+    assert "humongous" not in detail_en
+    # 中文同样
+    assert "堆容量不足" not in detail_zh
+    assert "Humongous" not in detail_zh
+
+
+def test_g1_full_gc_heap_inspection_recognized():
+    """回归: G1 Full GC 由 Heap Inspection (jcmd inspection) 触发时,
+    不应误报为堆压力信号. detail 应明确说明是手动 inspection, 不是 heap 容量问题.
+    """
+    ev = GCEvent(
+        id=1, uptime_sec=10.0, duration_ms=100, category="Full",
+        cause="Heap Inspection",
+        heap_before_mb=4096, heap_after_mb=2048, heap_total_mb=4096,
+        is_concurrent=False,
+        raw_body="[gc] GC(1) Pause Full (Heap Inspection) 4096M->2048M(4096M) 100.0ms",
+    )
+    stats = {
+        "by_category": {
+            "Full": {
+                "count": 1, "total_pause_ms": 100.0,
+                "avg_pause_ms": 100.0, "max_pause_ms": 100.0,
+                "p95_pause_ms": 100.0, "p99_pause_ms": 100.0,
+                "avg_freed_mb": 2048.0, "total_freed_mb": 2048.0,
+            },
+        },
+    }
+    result = _diagnose_memory([ev], "G1", stats)
+    g1_full_findings = [f for f in result["evidence"] + result["symptoms"] if f["rule"] == "g1_full_gc"]
+    assert g1_full_findings, f"expected g1_full_gc, got findings: {result}"
+    f = g1_full_findings[0]
+    detail_en = f["detail_en"].lower()
+    detail_zh = f["detail_zh"]
+    # detail must say it's inspection/manual
+    assert "inspection" in detail_en or "manual" in detail_en, \
+        f"detail 应说明是 inspection/manual, got: {f}"
+    # should NOT include heap pressure framing
+    assert "insufficient" not in detail_en
+    assert "humongous" not in detail_en
+    assert "堆容量不足" not in detail_zh
+    assert "Humongous" not in detail_zh
+
+
+def test_cms_full_gc_heap_inspection_initiated_recognized():
+    """CMS 上的 Heap Inspection Initiated GC (jcmd inspection) 也应识别为手动触发,
+    不报为堆压力。
+    """
+    ev = GCEvent(
+        id=1, uptime_sec=10.0, duration_ms=100, category="Full",
+        cause="Heap Inspection Initiated GC",
+        heap_before_mb=4096, heap_after_mb=2048, heap_total_mb=4096,
+        is_concurrent=False,
+        raw_body="[gc] GC(1) Pause Full (Heap Inspection Initiated GC) 4096M->2048M(4096M) 100.0ms",
+    )
+    stats = {
+        "by_category": {
+            "Full": {
+                "count": 1, "total_pause_ms": 100.0,
+                "avg_pause_ms": 100.0, "max_pause_ms": 100.0,
+                "p95_pause_ms": 100.0, "p99_pause_ms": 100.0,
+                "avg_freed_mb": 2048.0, "total_freed_mb": 2048.0,
+            },
+        },
+    }
+    result = _diagnose_memory([ev], "CMS", stats)
+    findings = result["evidence"] + result["symptoms"]
+    # CMS 上 g1_full_gc 不触发, 但 CMS 应该识别这个 cause 也不是堆压力
+    # 当前 CMS 规则没有 inspect 处理, 但至少不应误报成 concurrent_mode_failure 或 promotion_failed
+    rule_names = [f["rule"] for f in findings]
+    assert "cms_concurrent_mode_failure" not in rule_names
+    assert "cms_promotion_failed" not in rule_names
+
+
+def test_cms_promotion_failed_detected_in_real_jdk8_log():
+    """回归: JDK8 CMS Full GC 在 ParNew promotion failed 时, 即便 cause 是
+    'A1location Failure' (Allocation Failure 拼写错误) 也应正确识别为 Full GC,
+    且 raw_body 中应保留 'promotion failed' 文本供 cms_promotion_failed 规则匹配。
+    """
+    log = (
+        "2026-06-18T19:35:25.326+0800: 8127.330: "
+        "[GC (A1location Failure) 2026-06-18T19:35:25.326+0800:8127.334: "
+        "[ParNew (promotion failed): 2755221K->2744524K (2831168K), 0.9140144 secs]"
+        "2026-06-18T19:35:26.241+0800: 8128.248: [CMS: 8613055K->4193117K(9437184K), 18.5008788 secs] "
+        "11349373K->4193117K(12268352K), [Metaspace: 218204K->218204K (1263616K)], 19.4183835 secs] "
+        "[Times: user=18.66 sys=1.43, real=19.42 secs]"
+    )
+    from react_agent.gc_analyzer import parse_gc_log
+    parsed = parse_gc_log(log)
+
+    # 收集器应被识别为 CMS
+    assert parsed["collector"] == "CMS", f"got: {parsed['collector']}"
+
+    # 应该识别为 Full GC, 不是 Young GC
+    full_events = [e for e in parsed["events"] if e.category == "Full"]
+    assert len(full_events) >= 1, (
+        f"JDK8 [GC (cause) ...] 格式应识别为 Full GC, 实际 events: "
+        f"{[(e.category, e.cause) for e in parsed['events']]}"
+    )
+
+    # 至少一条 Full GC 的 raw_body 应包含 'promotion failed'
+    has_promotion_text = any(
+        "promotion failed" in (e.raw_body or "").lower()
+        for e in full_events
+    )
+    assert has_promotion_text, (
+        f"Full GC raw_body 必须保留 'promotion failed' 文本用于规则匹配, "
+        f"raw_bodies: {[e.raw_body[:120] for e in full_events]}"
+    )
+
+    # 整条日志通过诊断后应触发 cms_promotion_failed
+    from react_agent.gc_analyzer import analyze
+    stats = analyze(log)
+    findings = stats["diagnosis"]["evidence"] + stats["diagnosis"]["symptoms"]
+    rules = [f["rule"] for f in findings]
+    assert "cms_promotion_failed" in rules, (
+        f"cms_promotion_failed 应触发, 实际 findings: "
+        f"{[(f['rule'], f['severity']) for f in findings]}"
+    )
+
+
 def main():
     test_g1_jdk9_baseline()
     print("g1 jdk9 baseline ok")

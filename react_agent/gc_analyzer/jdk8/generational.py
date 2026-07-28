@@ -30,5 +30,10 @@ def parse_generational_gc(body: str, is_full: bool, cause: str, uptime: Optional
         heap_total_mb=_to_mb(float(ht), htu),
         duration_ms=dur_secs * 1000,
         raw_type=body.strip(),
+        # Preserve the full body so rule pattern matchers (e.g. cms_promotion_failed,
+        # which searches for 'promotion failed' in raw_body) can see sub-event text
+        # embedded in legacy CMS Full GC logs like:
+        #   [GC (Allocation Failure) ... [ParNew (promotion failed): ...] [CMS: ...]
+        raw_body=body.strip(),
         absolute_epoch_ms=abs_epoch_ms,
     )

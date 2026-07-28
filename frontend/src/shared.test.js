@@ -201,22 +201,22 @@ describe('calculateGCHealth', () => {
     expect(calculateGCHealth(stats)).toBe('good');
   });
 
-  it('should return "good" when 4 Full GC but no diagnosis (count alone is not enough)', () => {
+  it('should return "bad" when more than 3 Full GC', () => {
     const stats = {
       by_category: { Full: { count: 4, max_pause_ms: 200 } },
       throughput: 1.0,
       max_heap_usage_pct: 90,
     };
-    expect(calculateGCHealth(stats)).toBe('good');
+    expect(calculateGCHealth(stats)).toBe('bad');
   });
 
-  it('should return "good" when has Full GC but no diagnosis and other metrics OK', () => {
+  it('should return "warn" when has Full GC but <= 3', () => {
     const stats = {
       by_category: { Full: { count: 2, max_pause_ms: 100 } },
       throughput: 1.0,
       max_heap_usage_pct: 90,
     };
-    expect(calculateGCHealth(stats)).toBe('good');
+    expect(calculateGCHealth(stats)).toBe('warn');
   });
 
   it('should return "warn" when Full GC pairs with diagnosis.oom_risk=medium', () => {
@@ -229,14 +229,14 @@ describe('calculateGCHealth', () => {
     expect(calculateGCHealth(stats)).toBe('warn');
   });
 
-  it('Serial: 4 Full GC with healthy heap/throughput and no diagnosis stays good', () => {
+  it('Serial: 4 Full GC with healthy heap/throughput and no diagnosis escalates to bad', () => {
     const stats = {
       collector: 'Serial',
       by_category: { Full: { count: 4, max_pause_ms: 100 } },
       throughput: 1.0,
       max_heap_usage_pct: 40,
     };
-    expect(calculateGCHealth(stats)).toBe('good');
+    expect(calculateGCHealth(stats)).toBe('bad');
   });
 
   it('Serial: 4 Full GC with diagnosis.oom_risk=high escalates to bad', () => {
@@ -281,15 +281,14 @@ describe('calculateGCHealth', () => {
     expect(calculateGCHealth({})).toBe('good');
   });
 
-  it('ParallelGC: many Full GC events with short pause is not bad', () => {
+  it('ParallelGC: many Full GC events with fast pause is healthy (not bad)', () => {
     const stats = {
       collector: 'Parallel',
       by_category: { Full: { count: 10, max_pause_ms: 800 } },
       throughput: 0.97,
       max_heap_usage_pct: 70,
     };
-    // 800ms pause > 200ms threshold → caution (not good, not bad).
-    expect(calculateGCHealth(stats)).toBe('caution');
+    expect(calculateGCHealth(stats)).toBe('good');
   });
 
   it('ParallelGC: slow Full GC (>1s) escalates to warn', () => {
@@ -323,14 +322,14 @@ describe('calculateGCHealth', () => {
     expect(calculateGCHealth(stats)).toBe('bad');
   });
 
-  it('G1: 1 Full GC without diagnosis stays good (count alone is not enough)', () => {
+  it('G1: any Full GC still escalates (not collector-aware relaxation)', () => {
     const stats = {
       collector: 'G1',
       by_category: { Full: { count: 2, max_pause_ms: 200 } },
       throughput: 0.97,
       max_heap_usage_pct: 70,
     };
-    expect(calculateGCHealth(stats)).toBe('good');
+    expect(calculateGCHealth(stats)).toBe('warn');
   });
 
   it('G1: Full GC with diagnosis.oom_risk=medium escalates to warn', () => {
@@ -342,6 +341,166 @@ describe('calculateGCHealth', () => {
       diagnosis: { oom_risk: 'medium', leak_risk: 'none' },
     };
     expect(calculateGCHealth(stats)).toBe('warn');
+  });
+
+  // ===== New root-cause-driven semantics =====
+  // The banner is derived from diagnosis.root_cause.category, with severity
+  // modulated by finding severities. This avoids the vocabulary mismatch
+  // where banner showed "bad" while diagnosis root_cause was "performance".
+  // Legacy data without root_cause falls back to the old raw-stats heuristic.
+
+  it('root_cause=oom always escalates to bad', () => {
+    expect(calculateGCHealth({
+      collector: 'G1',
+      by_category: { Full: { count: 1 } },
+      throughput: 0.99,
+      max_heap_usage_pct: 30,
+      diagnosis: {
+        root_cause: { category: 'oom', label_en: 'OOM imminent' },
+        leak_risk: 'none',
+        oom_risk: 'high',
+        evidence: [{ rule: 'reclaim_low', severity: 'high' }],
+        symptoms: [],
+      },
+    })).toBe('bad');
+  });
+
+  it('root_cause=leak with high finding → bad', () => {
+    expect(calculateGCHealth({
+      collector: 'G1',
+      by_category: {},
+      throughput: 0.99,
+      max_heap_usage_pct: 30,
+      diagnosis: {
+        root_cause: { category: 'leak', label_en: 'Memory leak' },
+        leak_risk: 'high',
+        oom_risk: 'none',
+        evidence: [{ rule: 'g1_mixed_ineffective', severity: 'high' }],
+        symptoms: [],
+      },
+    })).toBe('bad');
+  });
+
+  it('root_cause=leak with medium finding → warn (not bad)', () => {
+    expect(calculateGCHealth({
+      collector: 'G1',
+      by_category: {},
+      throughput: 0.99,
+      max_heap_usage_pct: 30,
+      diagnosis: {
+        root_cause: { category: 'leak', label_en: 'Memory leak' },
+        leak_risk: 'medium',
+        oom_risk: 'none',
+        evidence: [{ rule: 'g1_mixed_ineffective', severity: 'medium' }],
+        symptoms: [],
+      },
+    })).toBe('warn');
+  });
+
+  it('root_cause=performance caps at warn even with high finding (no longer bad)', () => {
+    // Regression: rule-throughput-low fixture has gc_frequency_high firing
+    // as high but root_cause=performance. Banner should be warn, not bad.
+    expect(calculateGCHealth({
+      collector: 'G1',
+      by_category: { Young: { count: 60, max_pause_ms: 5 } },
+      throughput: 0.92,
+      max_heap_usage_pct: 23.4,
+      diagnosis: {
+        root_cause: { category: 'performance', label_en: 'Performance issue' },
+        leak_risk: 'none',
+        oom_risk: 'none',
+        evidence: [
+          { rule: 'throughput_low', severity: 'medium' },
+          { rule: 'gc_frequency_high', severity: 'high' },
+        ],
+        symptoms: [],
+      },
+    })).toBe('warn');
+  });
+
+  it('root_cause=performance with only medium findings → warn', () => {
+    expect(calculateGCHealth({
+      collector: 'G1',
+      by_category: {},
+      throughput: 0.95,
+      max_heap_usage_pct: 30,
+      diagnosis: {
+        root_cause: { category: 'performance', label_en: 'Performance issue' },
+        leak_risk: 'none',
+        oom_risk: 'none',
+        evidence: [
+          { rule: 'throughput_low', severity: 'medium' },
+          { rule: 'stw_time_ratio_high', severity: 'medium' },
+        ],
+        symptoms: [],
+      },
+    })).toBe('warn');
+  });
+
+  it('root_cause=healthy with raw stats OK → good', () => {
+    expect(calculateGCHealth({
+      collector: 'G1',
+      by_category: {},
+      throughput: 0.99,
+      max_heap_usage_pct: 30,
+      diagnosis: {
+        root_cause: { category: 'healthy', label_en: 'No significant issues' },
+        leak_risk: 'none',
+        oom_risk: 'none',
+        evidence: [],
+        symptoms: [],
+      },
+    })).toBe('good');
+  });
+
+  it('root_cause=healthy with extreme raw stats → warn', () => {
+    // Healthy diagnosis but heap >= 98% means there's something the rules didn't
+    // catch — surface as warn so user sees it.
+    expect(calculateGCHealth({
+      collector: 'G1',
+      by_category: { Full: { count: 1 } },
+      throughput: 0.99,
+      max_heap_usage_pct: 98.5,
+      diagnosis: {
+        root_cause: { category: 'healthy', label_en: 'No significant issues' },
+        leak_risk: 'none',
+        oom_risk: 'none',
+        evidence: [],
+        symptoms: [],
+      },
+    })).toBe('warn');
+  });
+
+  it('root_cause=performance with 4+ Full GC no longer overrides to bad', () => {
+    // Regression: g1_full_gc ≥ 3 used to escalate banner to bad even when
+    // root_cause=performance. New semantics: performance caps at warn.
+    expect(calculateGCHealth({
+      collector: 'G1',
+      by_category: { Full: { count: 4 } },
+      throughput: 0.99,
+      max_heap_usage_pct: 30,
+      diagnosis: {
+        root_cause: { category: 'performance', label_en: 'Performance issue' },
+        leak_risk: 'none',
+        oom_risk: 'none',
+        evidence: [{ rule: 'g1_full_gc', severity: 'high' }],
+        symptoms: [],
+      },
+    })).toBe('warn');
+  });
+
+  it('legacy data without root_cause falls back to raw stats heuristic', () => {
+    // No root_cause in diagnosis → use legacy logic (raw stats + finding scan)
+    expect(calculateGCHealth({
+      collector: 'G1',
+      by_category: { Full: { count: 4 } },
+      throughput: 0.99,
+      max_heap_usage_pct: 30,
+      diagnosis: {
+        leak_risk: 'high',
+        oom_risk: 'none',
+      },
+    })).toBe('bad');  // leak_risk=high triggers legacy "bad"
   });
 });
 
@@ -753,14 +912,14 @@ describe('formatHealthBanner', () => {
     return text;
   };
 
-  it('should return good level when 4 Full GC but no diagnosis', () => {
+  it('should return bad level when more than 3 Full GC', () => {
     const stats = {
       by_category: { Full: { count: 4, max_pause_ms: 100 } },
       throughput: 1.0,
       max_heap_usage_pct: 90,
     };
     const html = formatHealthBanner(stats, mockT);
-    expect(html).toContain('level-good');
+    expect(html).toContain('level-bad');
   });
 
   it('should return bad level when Full GC pairs with diagnosis.oom_risk=high', () => {

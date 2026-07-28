@@ -313,9 +313,31 @@ def _rule_g1_full_gc(events, collector, stats) -> List[Dict[str, Any]]:
 
     # Detect extra signals (Evacuation Failure / to-space exhausted)
     extra_signals = []
+    # Detect deliberate / manual Full GC triggers that should NOT be
+    # misread as heap pressure. JVM emits these causes when the Full GC is
+    # the JVM's response to a heap dump / inspection request, or an explicit
+    # System.gc() call — the user did this on purpose, the pause is not a
+    # heap-health signal.
+    manual_dump_count = 0
+    manual_inspect_count = 0
+    system_gc_count = 0
+    metadata_gc_count = 0
+    last_ditch_count = 0
     for e in full_events:
         rb = (e.raw_body or "") + " " + (e.cause or "")
         rb_l = rb.lower()
+        if "heap dump initiated gc" in rb_l:
+            manual_dump_count += 1
+        elif "heap inspection" in rb_l:
+            # Matches both "Heap Inspection" (G1 modern) and "Heap Inspection
+            # Initiated GC" (CMS classic). Both are user-triggered inspection.
+            manual_inspect_count += 1
+        elif "system.gc()" in rb_l or rb_l.strip() == "system.gc()":
+            system_gc_count += 1
+        elif "metadata gc threshold" in rb_l:
+            metadata_gc_count += 1
+        elif "last ditch collection" in rb_l:
+            last_ditch_count += 1
         if "to-space exhausted" in rb_l or "to space exhausted" in rb_l:
             extra_signals.append("to-space exhausted")
             break
@@ -323,7 +345,29 @@ def _rule_g1_full_gc(events, collector, stats) -> List[Dict[str, Any]]:
             extra_signals.append("evacuation failure")
             break
 
-    if extra_signals:
+    # Aggregate: manual triggers (dump + inspect) are not heap pressure
+    manual_total = manual_dump_count + manual_inspect_count
+
+    if manual_total > 0 and manual_total == n_full:
+        # All Full GCs in this log were caused by manual heap dump / inspection
+        causes = []
+        if manual_dump_count:
+            causes.append("heap dump (jmap -dump / jcmd GC.heap_dump)")
+        if manual_inspect_count:
+            causes.append("heap inspection (jcmd inspection)")
+        cause_text = " + ".join(causes)
+        detail_zh = (f"G1 出现 {n_full} 次 Full GC，均由手动操作触发"
+                     f"（{cause_text}），属预期操作而非堆压力")
+        detail_en = (f"G1 had {n_full} Full GC(s), all triggered by manual "
+                     f"{cause_text} — intentional, not heap pressure")
+        title_zh = "G1 Full GC 由手动操作触发"
+        title_en = "G1 Full GC triggered by manual operation"
+        # Manual triggers are not heap pressure signals — cap severity at
+        # medium even if count >= 3, so we don't escalate the OOM banner
+        # just because someone ran jmap / jcmd.
+        if n_full >= RULE_DEFINITIONS["g1_full_gc"]["thresholds"]["n_count_high"]:
+            severity = "medium"
+    elif extra_signals:
         detail_zh = (f"G1 出现 {n_full} 次 Full GC，其中检测到 {extra_signals[0]}，"
                      f"通常为堆容量不足或 Humongous 分配过多")
         detail_en = (f"G1 had {n_full} Full GC(s), detected {extra_signals[0]}; "

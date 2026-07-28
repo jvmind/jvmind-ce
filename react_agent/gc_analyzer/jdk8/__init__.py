@@ -287,7 +287,23 @@ def parse_gc_log_jdk8(text: str) -> Dict:
 
         # 5) Full GC / Young GC (generational collectors: Parallel/Serial/CMS)
         elif all_gen_names:
-            is_full = bool(re.search(r"\[Full\s+GC", body))
+            # Detect Full GC. Three patterns:
+            #   - "[Full GC (cause) ..." (modern JDK8 format)
+            #   - "[GC (cause) ... [CMS: ...]" (legacy CMS Full GC: outer [GC] +
+            #     inner [CMS:] sub-event indicates a full stop-the-world collection,
+            #     not a minor ParNew)
+            #   - "[GC (cause) ... [ParNew (promotion failed): ...]" (legacy CMS Full GC
+            #     with promotion-failed fallback: outer [GC] + inner ParNew sub-event
+            #     with a failed promotion IS a Full GC that includes a young-gen attempt)
+            has_full_prefix = bool(re.search(r"\[Full\s+GC", body))
+            has_cms_subevent = "[CMS:" in body
+            has_promotion_failure = "promotion failed" in body.lower() or "promotion failure" in body.lower()
+            # In legacy CMS format, the outer wrapper is bare [GC (cause). A bare [GC]
+            # with an inner [CMS:] sub-event or promotion failure IS a Full GC;
+            # without these markers, a bare [GC] is a minor ParNew event.
+            is_full = has_full_prefix or has_cms_subevent or (
+                not has_full_prefix and has_promotion_failure and "[CMS" not in body
+            )
             m_cause = _RE_GC_CAUSE.search(body)
             cause = m_cause.group(1) if m_cause else ""
             ev = generational.parse_generational_gc(body, is_full, cause, uptime, abs_epoch_ms)

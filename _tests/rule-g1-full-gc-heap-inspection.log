@@ -1,0 +1,4 @@
+[0.005s][info][gc] Using G1
+[0.010s][info][gc,init] Heap Region Size: 4M
+[0.010s][info][gc,init] Heap Max Capacity: 4096M
+[10.000s][info][gc] GC(1) Pause Full (Heap Inspection) 4096M->2048M(4096M) 100.0ms

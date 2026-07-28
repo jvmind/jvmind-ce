@@ -172,46 +172,76 @@ export function calculateGCHealth(stats) {
   const maxPause = Math.max(...maxDurations, 0);
   const tp = stats.throughput;
   const heapPct = stats.max_heap_usage_pct || 0;
-  const veryHighHeap = heapPct >= 98;
-  const highHeap = heapPct > 95;
+  const fullCount = stats.by_category?.Full?.count || 0;
+  const hasFull = fullCount > 0;
   const lowTp = tp != null && tp < 0.9;
-
-  let level = "good";
-
-  // 1) Backend diagnosis rules drive leak/OOM classification.
+  const veryHighHeap = heapPct >= 98;
+  const isParallel = collector === "Parallel";
   const d = stats.diagnosis;
+  const allFindings = d ? [...(d.evidence || []), ...(d.symptoms || [])] : [];
+  const hasHigh = allFindings.some(f => f.severity === "high");
+
+  // ===== Root-cause-driven semantics =====
+  // When the new-format diagnosis has root_cause, derive the banner level
+  // directly from it. This eliminates the vocabulary mismatch where banner
+  // said "bad" while root_cause said "performance".
+  if (d && d.root_cause && d.root_cause.category) {
+    const rc = d.root_cause.category;
+    if (rc === "oom") {
+      // OOM is the terminal state — always critical
+      return "bad";
+    }
+    if (rc === "leak") {
+      // Memory leak: high finding escalates to bad; medium stays warn
+      if (hasHigh || d.oom_risk === "high") return "bad";
+      return "warn";
+    }
+    if (rc === "performance") {
+      // Performance issue — never reaches "bad" through findings alone.
+      // High-severity findings (gc_frequency_high, throughput_low high, etc.)
+      // signal "should investigate" but not "imminent crash", so cap at warn.
+      return "warn";
+    }
+    // rc === "healthy" — no root cause. Surface raw-stats extremes as a
+    // safety net so the banner doesn't lie when rules missed something.
+    if (veryHighHeap || (hasFull && fullCount > 3) || lowTp) {
+      return "warn";
+    }
+    return "good";
+  }
+
+  // ===== Legacy fallback (data without root_cause) =====
+  // Pre-refactor diagnosis data may lack root_cause; fall back to the old
+  // raw-stats heuristic so legacy reports don't get worse banner behavior.
+  let level = "good";
+  if (isParallel) {
+    if (fullMaxPause > 2000) {
+      level = "bad";
+    } else if (fullMaxPause > 1000) {
+      level = "warn";
+    }
+  } else if (hasFull && fullCount > 3) {
+    level = "bad";
+  } else if (hasFull || (tp != null && tp < 0.9) || heapPct > 95) {
+    level = "warn";
+  } else if (lowTp || maxPause > 200) {
+    level = "caution";
+  }
+
   if (d && (d.leak_risk === "high" || d.oom_risk === "high")) {
     level = "bad";
   } else if (d && (d.leak_risk === "medium" || d.oom_risk === "medium")) {
-    level = "warn";
+    if (level === "good" || level === "caution") level = "warn";
   }
-
-  // 2) Extreme heap usage is always critical, regardless of diagnosis.
-  if (veryHighHeap) {
-    level = "bad";
-  } else if (highHeap && level === "good") {
-    // High heap alone warrants attention; escalate from good.
-    level = "warn";
-  }
-
-  // 3) Throughput degradation is the primary user-visible signal.
-  if (tp != null && tp < 0.9 && (level === "good" || level === "caution")) {
-    level = "warn";
-  }
-
-  // 4) Parallel GC has very long Full GC pauses — flag based on pause time,
-  //    not Full GC count, so it matches the other collectors' semantics.
-  if (collector === "Parallel") {
-    if (fullMaxPause > 2000 && level !== "bad") {
-      level = "bad";
-    } else if (fullMaxPause > 1000 && level === "good") {
-      level = "warn";
+  if (d) {
+    if (allFindings.length > 0) {
+      if (hasHigh) {
+        level = "bad";
+      } else if (allFindings.some(f => f.severity === "medium")
+                 && (level === "good" || level === "caution")) {
+        level = "warn";
+      }
     }
-  }
-
-  // 5) Mild pause elevation → caution.
-  if (level === "good" && maxPause > 200) {
-    level = "caution";
   }
 
   return level;
