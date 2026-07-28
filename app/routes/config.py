@@ -49,6 +49,13 @@ def put_config(request: Request, req: ConfigUpdateReq):
     if patch.get("use_built_in"):
         for k in ("openai_base_url", "openai_api_key", "openai_model"):
             patch.pop(k, None)
+    else:
+        # Treat blank secret fields as "not provided" so the frontend can
+        # leave the input empty (placeholder shows the saved key) without
+        # overwriting the stored value. Mirrors the fallback in /api/config/test.
+        for field in ("openai_api_key", "free_tier_api_key"):
+            if field in patch and (patch[field] == "" or patch[field] is None):
+                patch.pop(field, None)
     try:
         user = um.update_user_config(user_id, patch)
     except ValueError as e:
