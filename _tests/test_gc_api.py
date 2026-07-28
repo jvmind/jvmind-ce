@@ -41,6 +41,7 @@ def test_upload_parses_g1_log(auth_client):
     upload = r.json()
     assert upload["report_id"]
     assert upload["file_id"]
+    assert upload["created_at"]
     assert upload["stats"]["collector"] == "G1"
     assert upload["stats"]["events_total"] >= 11
     assert upload["stats"]["by_category"]["Full"]["count"] == 5

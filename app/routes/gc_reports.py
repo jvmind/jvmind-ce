@@ -104,12 +104,14 @@ async def upload_gc_log(request: Request, sid: str, file: UploadFile = File(...)
     retention = helpers._get_upload_retention_days(user_id)
     expires_at = helpers._future_str(retention * 86400) if retention > 0 else ""
 
+    created_at = helpers._now_str()
     report = {
         "filename": file.filename or "gc.log",
         "size": len(raw),
         "file_id": file_id,
         "stats": stats,
         "ai_conclusion": "",
+        "created_at": created_at,
     }
     rid = agent.memory.add_gc_report(sid, report)
 
@@ -135,6 +137,7 @@ async def upload_gc_log(request: Request, sid: str, file: UploadFile = File(...)
         "file_id": file_id,
         "filename": report["filename"],
         "stats": _stats_for_api(stats),
+        "created_at": created_at,
         "expires_at": expires_at,
     }
 
