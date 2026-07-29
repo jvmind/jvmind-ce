@@ -24,7 +24,11 @@ document.body.innerHTML = `
     <div id="heapdumpSidebarUploadZone"></div>
     <div id="heapdumpSidebarBatchBar" style="display:none">
       <button class="sidebar-selectall-btn"></button>
-      <button class="sidebar-delete-btn"></button>
+      <button class="sidebar-delete-btn">
+        <span class="si-icon"></span>
+        <span class="si-label" data-i18n="reports.bulk_delete"></span>
+        <span class="batch-count" hidden></span>
+      </button>
       <button class="sidebar-cancel-btn"></button>
     </div>
     <button id="heapdumpSidebarSelectBtn"></button>
@@ -212,7 +216,9 @@ describe('heapdump sidebar batch-select', () => {
     document.querySelector('#heapdumpSidebarBatchBar .sidebar-selectall-btn').click();
 
     expect(deleteBtn.disabled).toBe(false);
-    expect(deleteBtn.textContent).toContain('(2)');
+    const countEl = deleteBtn.querySelector('.batch-count');
+    expect(countEl.textContent).toBe('2');
+    expect(countEl.hidden).toBe(false);
   });
 
   it('select-all toggle disables the Delete button when nothing selected', () => {
@@ -230,7 +236,8 @@ describe('heapdump sidebar batch-select', () => {
 
     selectAllBtn.click();
     expect(deleteBtn.disabled).toBe(true);
-    expect(deleteBtn.textContent).not.toContain('(1)');
+    const countEl = deleteBtn.querySelector('.batch-count');
+    expect(countEl.hidden).toBe(true);
   });
 
   it('clicking Select does not grey out the active sidebar item', () => {
@@ -263,7 +270,9 @@ describe('heapdump sidebar batch-select', () => {
     expect(cb.innerHTML).toBe(ico('check-square'));
     const deleteBtn = document.querySelector('#heapdumpSidebarBatchBar .sidebar-delete-btn');
     expect(deleteBtn.disabled).toBe(false);
-    expect(deleteBtn.textContent).toContain('(1)');
+    const countEl = deleteBtn.querySelector('.batch-count');
+    expect(countEl.textContent).toBe('1');
+    expect(countEl.hidden).toBe(false);
   });
 
   it('bulk delete of session item removes it from sidebar (Fix 8C)', async () => {
@@ -382,7 +391,9 @@ describe('heapdump sidebar batch-select', () => {
   it('entering batch mode resets the Delete button to disabled/(0) (Fix 9C)', () => {
     const deleteBtn = document.querySelector('#heapdumpSidebarBatchBar .sidebar-delete-btn');
     deleteBtn.disabled = false;
-    deleteBtn.innerHTML = `${ico('trash-2')} Bulk Delete (5)`;
+    const countEl0 = deleteBtn.querySelector('.batch-count');
+    countEl0.textContent = '5';
+    countEl0.hidden = false;
     state.heapdumpHistoryReports = [
       makeReport('hd_1', 'a.hprof', '2024-01-02T00:00:00Z'),
       makeReport('hd_2', 'b.hprof', '2024-01-01T00:00:00Z'),
@@ -391,7 +402,8 @@ describe('heapdump sidebar batch-select', () => {
     document.getElementById('heapdumpSidebarSelectBtn').click();
 
     expect(deleteBtn.disabled).toBe(true);
-    expect(deleteBtn.textContent).not.toContain('(');
+    const countEl = deleteBtn.querySelector('.batch-count');
+    expect(countEl.hidden).toBe(true);
   });
 });
 

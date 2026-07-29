@@ -33,7 +33,11 @@ document.body.innerHTML = `
     <div id="jstackSidebarBatchBar">
       <button class="sidebar-cancel-btn"></button>
       <button class="sidebar-selectall-btn"></button>
-      <button class="sidebar-delete-btn"></button>
+      <button class="sidebar-delete-btn">
+        <span class="si-icon"></span>
+        <span class="si-label" data-i18n="reports.bulk_delete"></span>
+        <span class="batch-count" hidden></span>
+      </button>
     </div>
   </div>
   <div id="jstackSendToAgentBtn"></div>
@@ -142,7 +146,9 @@ describe('JStack sidebar batch-select Delete-button state', () => {
     document.querySelector('#jstackSidebarBatchBar .sidebar-selectall-btn').click();
 
     expect(deleteBtn.disabled).toBe(false);
-    expect(deleteBtn.textContent).toContain('(2)');
+    const countEl = deleteBtn.querySelector('.batch-count');
+    expect(countEl.textContent).toBe('2');
+    expect(countEl.hidden).toBe(false);
   });
 
   it('select-all toggle disables the Delete button when nothing selected', () => {
@@ -156,11 +162,13 @@ describe('JStack sidebar batch-select Delete-button state', () => {
 
     selectAllBtn.click();
     expect(deleteBtn.disabled).toBe(false);
-    expect(deleteBtn.textContent).toContain('(1)');
+    const countEl = deleteBtn.querySelector('.batch-count');
+    expect(countEl.textContent).toBe('1');
+    expect(countEl.hidden).toBe(false);
 
     selectAllBtn.click();
     expect(deleteBtn.disabled).toBe(true);
-    expect(deleteBtn.textContent).not.toContain('(1)');
+    expect(countEl.hidden).toBe(true);
   });
 
   it('clicking Select does not grey out the active sidebar item', () => {
@@ -179,7 +187,9 @@ describe('JStack sidebar batch-select Delete-button state', () => {
     expect(cb.innerHTML).toBe(ico('check-square'));
     const deleteBtn = document.querySelector('#jstackSidebarBatchBar .sidebar-delete-btn');
     expect(deleteBtn.disabled).toBe(false);
-    expect(deleteBtn.textContent).toContain('(1)');
+    const countEl = deleteBtn.querySelector('.batch-count');
+    expect(countEl.textContent).toBe('1');
+    expect(countEl.hidden).toBe(false);
   });
 
   it('bulk delete removes sidebar items after refresh (Fix 8B)', async () => {
@@ -211,7 +221,9 @@ describe('JStack sidebar batch-select Delete-button state', () => {
   it('entering batch mode resets the Delete button to disabled/(0) (Fix 9B)', () => {
     const deleteBtn = document.querySelector('#jstackSidebarBatchBar .sidebar-delete-btn');
     deleteBtn.disabled = false;
-    deleteBtn.innerHTML = `${ico('trash-2')} Bulk Delete (5)`;
+    const countEl0 = deleteBtn.querySelector('.batch-count');
+    countEl0.textContent = '5';
+    countEl0.hidden = false;
     renderSidebar([
       makeSidebarItem('js_a', 'a.txt'),
       makeSidebarItem('js_b', 'b.txt'),
@@ -219,6 +231,7 @@ describe('JStack sidebar batch-select Delete-button state', () => {
     document.getElementById('jstackSidebarSelectBtn').click();
 
     expect(deleteBtn.disabled).toBe(true);
-    expect(deleteBtn.textContent).not.toContain('(');
+    const countEl = deleteBtn.querySelector('.batch-count');
+    expect(countEl.hidden).toBe(true);
   });
 });

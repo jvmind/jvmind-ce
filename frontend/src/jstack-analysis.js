@@ -829,8 +829,13 @@ function _updateJstackBatchDeleteBtn() {
   const checked = document.querySelectorAll("#jstackSidebarList .sidebar-item.batch-active:not(.batch-excluded) .si-checkbox");
   const selected = [...checked].filter(c => c.innerHTML === ico('check-square')).length;
   const deleteBtn = document.querySelector("#jstackSidebarBatchBar .sidebar-delete-btn");
-  if (deleteBtn) {
-    deleteBtn.disabled = selected === 0;
-    deleteBtn.innerHTML = selected ? `${ico('trash-2')} ${t("reports.bulk_delete")} (${selected})` : `${ico('trash-2')} ${t("reports.bulk_delete")}`;
+  if (!deleteBtn) return;
+  deleteBtn.disabled = selected === 0;
+  const iconEl = deleteBtn.querySelector(".si-icon");
+  if (iconEl && !iconEl.innerHTML) iconEl.innerHTML = ico("trash-2");
+  const countEl = deleteBtn.querySelector(".batch-count");
+  if (countEl) {
+    countEl.textContent = selected > 0 ? String(selected) : "";
+    countEl.hidden = selected === 0;
   }
 }

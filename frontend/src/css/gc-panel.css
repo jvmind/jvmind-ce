@@ -669,8 +669,12 @@
     min-height: 52px;
   }
   .health-banner.level-good { background: rgba(63,185,80,0.12); border: 1px solid rgba(63,185,80,0.3); color: var(--green); }
-  .health-banner.level-caution { background: rgba(210,153,34,0.12); border: 1px solid rgba(210,153,34,0.3); color: var(--orange); }
-  .health-banner.level-warn { background: rgba(248,81,73,0.12); border: 1px solid rgba(248,81,73,0.3); color: var(--red); }
+  .health-banner.level-caution { background: rgba(210,153,34,0.10); border: 1px solid rgba(210,153,34,0.3); color: var(--orange); }
+  /* level-warn (label: 需关注): orange, not red. Root cause `performance` is
+     also orange, so banner must match. Only `level-bad` (需立即关注) is red.
+     The slight alpha bump (0.10 → 0.18) keeps warn visually distinct from caution
+     while preserving the green→orange→red gradient. */
+  .health-banner.level-warn { background: rgba(210,153,34,0.18); border: 1px solid rgba(210,153,34,0.45); color: var(--orange); }
   .health-banner.level-bad { background: rgba(248,81,73,0.18); border: 1px solid rgba(248,81,73,0.4); color: var(--red); }
   .health-banner .hb-status { font-weight: 600; white-space: nowrap; }
   .health-banner .hb-detail {
@@ -1046,16 +1050,38 @@
 }
 .sidebar-batch-bar button,
 .sidebar-select-btn {
-  flex: 1; padding: 4px 6px; font-size: 11px;
+  flex: 1 1 auto; min-width: 0;
+  padding: 4px 6px; font-size: 11px;
   border: 1px solid var(--border); border-radius: 4px;
   background: transparent; color: var(--text-dim); cursor: pointer;
   transition: all 0.15s;
+  display: inline-flex; align-items: center; gap: 3px;
+  white-space: nowrap; overflow: hidden;
 }
 .sidebar-batch-bar button:hover,
 .sidebar-select-btn:hover { color: var(--text); border-color: var(--primary); }
 .sidebar-batch-bar .sidebar-delete-btn { color: var(--red); }
 .sidebar-batch-bar .sidebar-delete-btn:disabled { opacity: 0.35; cursor: default; color: var(--text-dim); }
 .sidebar-batch-bar .sidebar-delete-btn:disabled:hover { border-color: var(--border); }
+.sidebar-batch-bar .si-label {
+  overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.sidebar-batch-bar .si-icon {
+  flex-shrink: 0; display: inline-flex; align-items: center;
+}
+.sidebar-batch-bar .si-icon svg { width: 12px; height: 12px; display: block; }
+.sidebar-batch-bar .batch-count {
+  flex-shrink: 0;
+  padding: 0 5px;
+  background: var(--primary);
+  color: white;
+  border-radius: 10px;
+  font-size: 10px;
+  line-height: 14px;
+  min-width: 14px;
+  text-align: center;
+}
+.sidebar-batch-bar .batch-count[hidden] { display: none; }
 .sidebar-select-btn {
   flex: 0 0 auto; margin: 4px 8px 6px;
 }

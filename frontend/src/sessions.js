@@ -259,7 +259,10 @@ export async function selectSession(sid) {
   _setActiveSessionClass(sid);
   try {
     const data = await api(`/api/sessions/${sid}`);
-    document.getElementById("currentTitle").textContent = data.title;
+    const titleEl = document.getElementById("currentTitle");
+    if (titleEl) titleEl.textContent = data.title || "";
+    const idx = state.sessions.findIndex(s => s.id === sid);
+    if (idx >= 0) state.sessions[idx] = { ...state.sessions[idx], title: data.title || "" };
     // 顶部删除按钮：团队会话仅创建者、owner 或被授权成员可见
     const myId = state.currentUser && state.currentUser.id;
     const canDelete = !data.org_id || data.user_id === myId || _myOrgCanDeleteOthers;
@@ -390,15 +393,27 @@ export async function clearMessages() {
   app.renderMessages([]);
 }
 
+export function renderCurrentTitle() {
+  const el = document.getElementById("currentTitle");
+  if (!el || !state.currentSessionId) return;
+  const cur = state.sessions.find(s => s.id === state.currentSessionId);
+  if (cur) el.textContent = cur.title || "";
+}
+
 export async function renameSession() {
   if (!state.currentSessionId) return;
-  const title = prompt(t("chat.rename_prompt"));
-  if (!title) return;
+  const current = state.sessions.find(s => s.id === state.currentSessionId);
+  const defaultTitle = (current && current.title) || "";
+  const raw = prompt(t("chat.rename_prompt"), defaultTitle);
+  if (raw == null) return;
+  const title = raw.trim();
+  if (!title || title === defaultTitle) return;
   await api(`/api/sessions/${state.currentSessionId}`, {
     method: "PATCH",
     body: JSON.stringify({ title }),
   });
   await loadSessions();
+  renderCurrentTitle();
 }
 document.getElementById("newSessionBtn").onclick = newSession;
 document.getElementById("refreshBtn").onclick = async () => {
@@ -422,4 +437,4 @@ document.getElementById("sidebarToggle").onclick = () => {
   document.getElementById("sidebarToggle").title = collapsed ? t("sidebar.expand") : t("sidebar.toggle");
 };
 
-Object.assign(app, { resetSessionView, apiWithAuth, checkHealth, loadSessions, renderSessionList, selectSession, newSession, deleteSession, clearMessages, renameSession, refreshSessionUpdateBaseline });
+Object.assign(app, { resetSessionView, apiWithAuth, checkHealth, loadSessions, renderSessionList, selectSession, newSession, deleteSession, clearMessages, renameSession, renderCurrentTitle, refreshSessionUpdateBaseline });

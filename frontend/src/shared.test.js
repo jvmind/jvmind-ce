@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'fs';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import {
   getCookie,
   csrfHeaders,
@@ -920,6 +923,31 @@ describe('formatHealthBanner', () => {
     };
     const html = formatHealthBanner(stats, mockT);
     expect(html).toContain('level-bad');
+  });
+
+  it('Banner level-warn CSS uses orange (not red) to match performance root_cause color', () => {
+    // Regression: user reported banner was red while root_cause=performance was
+    // orange. CSS had level-warn → red, breaking the visual color consistency.
+    // Fix: level-warn should use --orange (same as level-caution family).
+    // Read the CSS file to verify the color mapping.
+    // Note: shared.test.js is in src/, not src/test/, so import.meta.dirname
+    // resolves to src/. The CSS is at src/css/gc-panel.css (one segment away).
+    const here = dirname(fileURLToPath(import.meta.url));
+    const cssPath = resolve(here, 'css', 'gc-panel.css');
+    const css = readFileSync(cssPath, 'utf-8');
+
+    // Extract the level-warn rule's color value
+    const warnMatch = css.match(/\.health-banner\.level-warn\s*\{[^}]*color:\s*([^;]+);/);
+    expect(warnMatch, `level-warn rule not found in CSS; looked in ${cssPath}`).not.toBeNull();
+    const warnColor = warnMatch[1].trim();
+    // Must reference --orange, not --red
+    expect(warnColor).toMatch(/var\(--orange\)/);
+    expect(warnColor).not.toMatch(/var\(--red\)/);
+
+    // level-bad must still be red (the only level that should be red)
+    const badMatch = css.match(/\.health-banner\.level-bad\s*\{[^}]*color:\s*([^;]+);/);
+    expect(badMatch).not.toBeNull();
+    expect(badMatch[1].trim()).toMatch(/var\(--red\)/);
   });
 
   it('should return bad level when Full GC pairs with diagnosis.oom_risk=high', () => {

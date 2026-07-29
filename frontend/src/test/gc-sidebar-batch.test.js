@@ -27,7 +27,11 @@ document.body.innerHTML = `
   <div id="gcSidebarBatchBar">
     <button class="sidebar-cancel-btn"></button>
     <button class="sidebar-selectall-btn"></button>
-    <button class="sidebar-delete-btn"></button>
+    <button class="sidebar-delete-btn">
+      <span class="si-icon"></span>
+      <span class="si-label" data-i18n="reports.bulk_delete"></span>
+      <span class="batch-count" hidden></span>
+    </button>
   </div>
   <div id="gcSidebarList"></div>
   <div id="gcReportHeader"></div>
@@ -137,7 +141,9 @@ describe('GC sidebar batch-select Delete-button state', () => {
     document.querySelector('#gcSidebarBatchBar .sidebar-selectall-btn').click();
 
     expect(deleteBtn.disabled).toBe(false);
-    expect(deleteBtn.textContent).toContain('(2)');
+    const countEl = deleteBtn.querySelector('.batch-count');
+    expect(countEl.textContent).toBe('2');
+    expect(countEl.hidden).toBe(false);
   });
 
   it('select-all toggle disables the Delete button when nothing selected', () => {
@@ -151,11 +157,13 @@ describe('GC sidebar batch-select Delete-button state', () => {
 
     selectAllBtn.click();
     expect(deleteBtn.disabled).toBe(false);
-    expect(deleteBtn.textContent).toContain('(1)');
+    const countEl = deleteBtn.querySelector('.batch-count');
+    expect(countEl.textContent).toBe('1');
+    expect(countEl.hidden).toBe(false);
 
     selectAllBtn.click();
     expect(deleteBtn.disabled).toBe(true);
-    expect(deleteBtn.textContent).not.toContain('(1)');
+    expect(countEl.hidden).toBe(true);
   });
 
   it('clicking Select does not grey out the active sidebar item', () => {
@@ -175,7 +183,9 @@ describe('GC sidebar batch-select Delete-button state', () => {
     // The Delete button count must reflect the active item selection
     const deleteBtn = document.querySelector('#gcSidebarBatchBar .sidebar-delete-btn');
     expect(deleteBtn.disabled).toBe(false);
-    expect(deleteBtn.textContent).toContain('(1)');
+    const countEl = deleteBtn.querySelector('.batch-count');
+    expect(countEl.textContent).toBe('1');
+    expect(countEl.hidden).toBe(false);
   });
 
   it('bulk delete removes sidebar items after refresh (Fix 8A)', async () => {
@@ -215,7 +225,9 @@ describe('GC sidebar batch-select Delete-button state', () => {
     // batch session that was cancelled without resetting the button.
     const deleteBtn = document.querySelector('#gcSidebarBatchBar .sidebar-delete-btn');
     deleteBtn.disabled = false;
-    deleteBtn.innerHTML = `${ico('trash-2')} Bulk Delete (5)`;
+    const countEl0 = deleteBtn.querySelector('.batch-count');
+    countEl0.textContent = '5';
+    countEl0.hidden = false;
     renderSidebar([
       makeSidebarItem('gc_a', 'a-gc.log'),
       makeSidebarItem('gc_b', 'b-gc.log'),
@@ -223,6 +235,11 @@ describe('GC sidebar batch-select Delete-button state', () => {
     document.getElementById('gcSidebarSelectBtn').click();
 
     expect(deleteBtn.disabled).toBe(true);
-    expect(deleteBtn.textContent).not.toContain('(');
+    const countEl = deleteBtn.querySelector('.batch-count');
+    expect(countEl.hidden).toBe(true);
+    // The icon and label spans must survive the reset (Bug 2 fix: structure
+    // is preserved across updates, not wiped by innerHTML).
+    expect(deleteBtn.querySelector('.si-icon')).not.toBeNull();
+    expect(deleteBtn.querySelector('.si-label')).not.toBeNull();
   });
 });
