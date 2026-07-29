@@ -1,6 +1,7 @@
 """Shared statistics computation for GC analysis (works for both JDK9+ and JDK8 formats)."""
 from __future__ import annotations
 
+import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .base import GCEvent
@@ -12,17 +13,17 @@ from .base import GCEvent
 
 RULE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "throughput_low": {
-        "category": "perf",
+        "category": "performance",
         "applies_to": "all",
         "thresholds": {"medium": 0.95, "high": 0.90, "unit": "ratio"},
     },
     "stw_time_ratio_high": {
-        "category": "perf",
+        "category": "performance",
         "applies_to": "all",
         "thresholds": {"medium": 0.05, "high": 0.10, "unit": "ratio"},
     },
     "gc_frequency_high": {
-        "category": "perf",
+        "category": "performance",
         "applies_to": "all",
         "thresholds": {
             "young_per_min": {"medium": 30, "high": 60},
@@ -34,8 +35,13 @@ RULE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "applies_to": "all",
         "thresholds": {"avg_reclaim_ratio": 0.05, "min_events": 3},
     },
+    "explicit_gc_called": {
+        "category": "performance",
+        "applies_to": "all",
+        "thresholds": {"min_count": 1, "high_count": 3},
+    },
     "single_pause_long": {
-        "category": "perf",
+        "category": "performance",
         "applies_to": "all",
         "thresholds": {
             "Young":       {"medium": 200,  "high": 500,  "unit": "ms"},
@@ -58,6 +64,32 @@ RULE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "category": "leak",
         "applies_to": "G1",
         "thresholds": {"min_events": 3, "slope_mb_per_event": 0.5},
+    },
+    "g1_compaction_pause": {
+        # G1 Compaction Pause is real heap pressure but NOT necessarily a
+        # leak (could be transient burst, cache warmup, or allocation spike).
+        # Better classified as performance — visible as a finding but not
+        # escalated to leak_risk. The leak_risk should be determined by
+        # g1_mixed_ineffective (steady heap growth) + reclaim_low instead.
+        "category": "performance",
+        "applies_to": "G1",
+        # Even 1 G1 Compaction Pause is significant (G1 rarely does this).
+        "thresholds": {"min_count": 1, "high_count": 3},
+    },
+    "evacuation_failure": {
+        # Evacuation Failure indicates Old Gen can't hold promoted objects —
+        # a precursor to Full GC, but often transient. NOT a leak signal.
+        "category": "performance",
+        "applies_to": "all",
+        # Single Evacuation Failure is sometimes normal (transient old gen full);
+        # 3+ starts to indicate systematic pressure. ≥ 10 is severe.
+        "thresholds": {"min_count": 3, "high_count": 10},
+    },
+    "g1_humongous_allocation": {
+        "category": "performance",
+        "applies_to": "G1",
+        # Humongous allocation is common in batch/ETL apps; only alert when sustained.
+        "thresholds": {"min_count": 10, "high_count": 30},
     },
     # Phase CMS + ZGC: collector-specific rules (per user principle OOM = Full GC + cannot reclaim)
     "cms_concurrent_mode_failure": {
@@ -165,6 +197,23 @@ def _rule_stw_time_ratio_high(events, collector, stats) -> List[Dict[str, Any]]:
     return []
 
 
+def _is_manual_full_gc(event) -> bool:
+    """Return True if the Full GC was triggered manually (not by heap pressure).
+
+    Manual triggers include:
+    - System.gc() — application code explicitly calling System.gc()
+    - Heap Dump Initiated GC — jmap -dump / jcmd GC.heap_dump
+    - Heap Inspection — jcmd inspection
+
+    These are NOT heap pressure signals; they should not contribute to
+    Full GC frequency metrics (which indicate real heap pressure).
+    """
+    text = ((event.raw_body or "") + " " + (event.cause or "")).lower()
+    return any(marker in text for marker in (
+        "system.gc()", "heap dump initiated gc", "heap inspection",
+    ))
+
+
 def _rule_gc_frequency_high(events, collector, stats) -> List[Dict[str, Any]]:
     epm = stats.get("events_per_minute")
     if epm is None:
@@ -198,15 +247,56 @@ def _rule_gc_frequency_high(events, collector, stats) -> List[Dict[str, Any]]:
             f"Young GCs at {young_per_min:.0f}/min, exceeding 30/min warning threshold",
         ))
 
-    # Full GC frequency (per-minute)
-    full_per_min = (full_count / duration_sec * 60) if duration_sec > 0 else 0
-    if full_per_min >= th["full_per_min"]["high"] and full_count >= 1:
+    # Full GC frequency (per-minute) — only count REAL (non-manual) Full GC.
+    # Manual Full GC (System.gc() / heap dump / heap inspection) are handled
+    # by explicit_gc_called and should not inflate gc_frequency_high.
+    #
+    # Sample-size-aware severity (statistical confidence):
+    # - count < 3: don't fire (single event is noise)
+    # - count 3-4 + rate >= threshold: medium (rate high but small sample;
+    #   transient burst possible in short logs)
+    # - count >= 5 + rate >= threshold: high (confident sustained pressure)
+    # This prevents over-alerting on short log windows where 1-3 events look
+    # like a high per-minute rate but may be transient.
+    real_full_events = [e for e in events
+                        if e.category == "Full" and not _is_manual_full_gc(e)]
+    real_full_count = len(real_full_events)
+    real_full_per_min = (real_full_count / duration_sec * 60) if duration_sec > 0 else 0
+    rate_threshold = th["full_per_min"]["high"]
+
+    # Determine severity based on sample size + rate
+    severity = None
+    if real_full_count >= 5 and real_full_per_min >= rate_threshold:
+        severity = "high"
+    elif real_full_count >= 3 and real_full_per_min >= rate_threshold:
+        severity = "medium"
+
+    if severity:
+        # Mention manual count for context
+        manual_note = ""
+        if full_count > real_full_count:
+            manual_n = full_count - real_full_count
+            manual_note_zh = f"（另有 {manual_n} 次手动触发）"
+            manual_note_en = f" ({manual_n} manual trigger{'s' if manual_n > 1 else ''} excluded)"
+        else:
+            manual_note_zh = manual_note_en = ""
+        # Duration context for short logs (helps user judge transient vs sustained)
+        duration_note = ""
+        if duration_sec > 0 and duration_sec < 60 and real_full_count < 5:
+            duration_note_zh = f"日志仅 {duration_sec:.0f}s, 样本量小, 可能是瞬时高峰"
+            duration_note_en = f"log spans only {duration_sec:.0f}s — small sample, may be transient"
+        else:
+            duration_note_zh = duration_note_en = ""
+
         findings.append(_make_finding(
-            "gc_frequency_high", "high",
-            f"Full GC 频率过高 ({full_per_min:.2f} 次/分钟)",
-            f"Full GC frequency too high ({full_per_min:.2f}/min)",
-            f"Full GC {full_count} 次，平均 {full_per_min:.2f} 次/分钟（约 {60/full_per_min:.0f} 秒 1 次）",
-            f"{full_count} Full GCs, ~{60/full_per_min:.0f}s apart",
+            "gc_frequency_high", severity,
+            f"Full GC 频率过高 ({real_full_per_min:.2f} 次/分钟)",
+            f"Full GC frequency too high ({real_full_per_min:.2f}/min)",
+            (f"Full GC {real_full_count} 次，平均 {real_full_per_min:.2f} 次/分钟"
+             f"（约 {60/real_full_per_min:.0f} 秒 1 次）{manual_note_zh}。"
+             f"{duration_note_zh}"),
+            (f"{real_full_count} Full GCs, ~{60/real_full_per_min:.0f}s apart{manual_note_en}. "
+             f"{duration_note_en}"),
         ))
 
     return findings
@@ -259,6 +349,40 @@ def _rule_reclaim_low(events, collector, stats) -> List[Dict[str, Any]]:
             f"{len(reclaims)} 次 {cat_name} GC 平均回收率仅 {avg_reclaim*100:.1f}%，{trend_zh}",
             f"Average reclaim over {len(reclaims)} {cat_name} GCs only {avg_reclaim*100:.1f}%, {trend_en}",
         ))
+    return findings
+
+
+def _rule_explicit_gc_called(events, collector, stats) -> List[Dict[str, Any]]:
+    """Detect Full GC triggered by System.gc() (application code call).
+
+    Universal: applies to all collectors.
+    Performance category: code smell — production code should consider
+    -XX:+DisableExplicitGC to disable explicit GC calls.
+    """
+    findings: List[Dict[str, Any]] = []
+    explicit_count = 0
+    for e in events:
+        if e.category != "Full":
+            continue
+        rb = ((e.raw_body or "") + " " + (e.cause or "")).lower()
+        # Match exact "System.gc()" or " system.gc() " token; the cause field
+        # in JDK9+ logs is exactly "System.gc()", while JDK8 puts it after [GC
+        # (System.gc()) ...]. Both contain the literal substring.
+        if "system.gc()" in rb:
+            explicit_count += 1
+    if explicit_count == 0:
+        return []
+    th = RULE_DEFINITIONS["explicit_gc_called"]["thresholds"]
+    severity = "high" if explicit_count >= th["high_count"] else "medium"
+    findings.append(_make_finding(
+        "explicit_gc_called", severity,
+        "应用代码调用了 System.gc()",
+        "Application code called System.gc()",
+        (f"Full GC 触发原因: System.gc()，共 {explicit_count} 次。"
+         f"生产环境应考虑 -XX:+DisableExplicitGC 禁用显式 GC 调用"),
+        (f"Full GC triggered by System.gc() ({explicit_count} times). "
+         f"Production code should consider -XX:+DisableExplicitGC to disable explicit GC"),
+    ))
     return findings
 
 
@@ -345,16 +469,23 @@ def _rule_g1_full_gc(events, collector, stats) -> List[Dict[str, Any]]:
             extra_signals.append("evacuation failure")
             break
 
-    # Aggregate: manual triggers (dump + inspect) are not heap pressure
-    manual_total = manual_dump_count + manual_inspect_count
+    # Aggregate: manual triggers (dump + inspect + System.gc()) are not
+    # heap pressure. Note: System.gc() is an application code call (not SRE
+    # operation like dump/inspect), so the dedicated explicit_gc_called
+    # rule will also fire separately with a code-smell recommendation.
+    manual_total = manual_dump_count + manual_inspect_count + system_gc_count
+    # Non-manual = real heap pressure events
+    non_manual = n_full - manual_total
 
     if manual_total > 0 and manual_total == n_full:
-        # All Full GCs in this log were caused by manual heap dump / inspection
+        # All Full GCs in this log were caused by manual triggers
         causes = []
         if manual_dump_count:
             causes.append("heap dump (jmap -dump / jcmd GC.heap_dump)")
         if manual_inspect_count:
             causes.append("heap inspection (jcmd inspection)")
+        if system_gc_count:
+            causes.append("System.gc() (application code call)")
         cause_text = " + ".join(causes)
         detail_zh = (f"G1 出现 {n_full} 次 Full GC，均由手动操作触发"
                      f"（{cause_text}），属预期操作而非堆压力")
@@ -364,9 +495,32 @@ def _rule_g1_full_gc(events, collector, stats) -> List[Dict[str, Any]]:
         title_en = "G1 Full GC triggered by manual operation"
         # Manual triggers are not heap pressure signals — cap severity at
         # medium even if count >= 3, so we don't escalate the OOM banner
-        # just because someone ran jmap / jcmd.
+        # just because someone ran jmap / jcmd or application code called
+        # System.gc().
         if n_full >= RULE_DEFINITIONS["g1_full_gc"]["thresholds"]["n_count_high"]:
             severity = "medium"
+    elif manual_total > 0 and non_manual > 0:
+        # Mixed: some manual, some real heap pressure. Break down both counts
+        # so the user understands the diagnosis correctly.
+        manual_parts = []
+        if manual_dump_count:
+            manual_parts.append(f"{manual_dump_count} dump")
+        if manual_inspect_count:
+            manual_parts.append(f"{manual_inspect_count} inspect")
+        if system_gc_count:
+            manual_parts.append(f"{system_gc_count} System.gc()")
+        manual_text = " + ".join(manual_parts)
+        detail_zh = (f"G1 出现 {n_full} 次 Full GC：{manual_total} 次手动"
+                     f"（{manual_text}），{non_manual} 次真实堆压力 (G1 Compaction Pause 等)。"
+                     f"手动部分非堆压力, 真实压力部分需关注")
+        detail_en = (f"G1 had {n_full} Full GC(s): {manual_total} manual "
+                     f"({manual_text}) and {non_manual} from real heap pressure "
+                     f"(e.g. G1 Compaction Pause). Manual triggers are not "
+                     f"heap pressure; the {non_manual} real-pressure events need attention")
+        title_zh = "G1 Full GC 混合触发"
+        title_en = "G1 Full GC: mixed manual + heap pressure"
+        if n_full >= RULE_DEFINITIONS["g1_full_gc"]["thresholds"]["n_count_high"]:
+            severity = "high"  # real pressure events present
     elif extra_signals:
         detail_zh = (f"G1 出现 {n_full} 次 Full GC，其中检测到 {extra_signals[0]}，"
                      f"通常为堆容量不足或 Humongous 分配过多")
@@ -381,6 +535,100 @@ def _rule_g1_full_gc(events, collector, stats) -> List[Dict[str, Any]]:
         title_en = "G1 experienced Full GC"
 
     return [_make_finding("g1_full_gc", severity, title_zh, title_en, detail_zh, detail_en)]
+
+
+def _rule_g1_compaction_pause(events, collector, stats) -> List[Dict[str, Any]]:
+    """Detect G1 Compaction Pause (G1主动全堆压缩, 真堆压力信号)。
+
+    G1 正常通过 Mixed GC 回收老年代。当 Mixed GC 无法跟上晋升速率,
+    G1 会切换到全堆压缩 (compaction) 模式, 触发 Pause Full (G1 Compaction Pause)。
+    这是真实的内存压力信号, 表示堆空间被占满且无法正常回收。
+
+    Performance category: 1-2 是 medium, ≥ 3 是 high。
+    """
+    if collector != "G1":
+        return []
+    compaction_count = sum(
+        1 for e in events
+        if e.category == "Full"
+        and "g1 compaction pause" in ((e.raw_body or "") + " " + (e.cause or "")).lower()
+    )
+    th = RULE_DEFINITIONS["g1_compaction_pause"]["thresholds"]
+    if compaction_count < th["min_count"]:
+        return []
+    severity = "high" if compaction_count >= th["high_count"] else "medium"
+    return [_make_finding(
+        "g1_compaction_pause", severity,
+        "G1 Compaction Pause (全堆压缩)",
+        "G1 Compaction Pause (full heap compaction)",
+        f"G1 主动全堆压缩 {compaction_count} 次, 表示 Mixed GC 已无法跟上晋升速率, 堆空间被占满",
+        f"G1 triggered full heap compaction {compaction_count} time(s) — "
+        f"Mixed GC cannot keep up with promotion, heap is full",
+    )]
+
+
+def _rule_evacuation_failure(events, collector, stats) -> List[Dict[str, Any]]:
+    """Detect frequent Evacuation Failure during Young/Mixed GC.
+
+    Evacuation Failure = G1 在年轻代/混合回收时, 找不到 Survivor 空间
+    容纳晋升对象。这是老年代空间不足的早期信号, 通常先于 Full GC。
+    """
+    failure_count = sum(
+        1 for e in events
+        if e.category in ("Young", "Mixed")
+        and ("evacuation failure" in ((e.raw_body or "") + " " + (e.cause or "")).lower()
+             or "evacuation failed" in ((e.raw_body or "") + " " + (e.cause or "")).lower())
+    )
+    th = RULE_DEFINITIONS["evacuation_failure"]["thresholds"]
+    if failure_count < th["min_count"]:
+        return []
+    severity = "high" if failure_count >= th["high_count"] else "medium"
+    return [_make_finding(
+        "evacuation_failure", severity,
+        "Evacuation Failure 频繁",
+        "Frequent Evacuation Failure",
+        f"G1 Young/Mixed GC 阶段找不到 Survivor 空间容纳晋升对象 {failure_count} 次, "
+        f"通常意味着老年代已满, 是 Full GC 的前兆",
+        f"G1 Young/Mixed GC cannot find Survivor space for promoted objects "
+        f"({failure_count} times) — usually indicates Old Gen is full, "
+        f"a precursor to Full GC",
+    )]
+
+
+def _rule_g1_humongous_allocation(events, collector, stats) -> List[Dict[str, Any]]:
+    """Detect frequent G1 Humongous Allocation.
+
+    Humongous objects (≥ region size / 2) 在 G1 中特殊处理, 直接分配到老年代。
+    频繁的 humongous allocation 暗示业务层有大量大对象, 会导致:
+    - 老年代碎片化 (humongous regions 不可被普通 Mixed GC 回收)
+    - 频繁的 Full GC
+    """
+    if collector != "G1":
+        return []
+    # Humongous Allocation appears in both Young GC and Mixed GC body. G1
+    # Mixed GC handles humongous regions in old gen — when humongous is in
+    # the body of a Mixed event, it's still humongous allocation pressure.
+    # Counting only Young misses the Mixed case (production report 6dc3798718:
+    # 91 humongous events, 43 in Young + 48 in Mixed → old rule only saw 43).
+    humongous_count = sum(
+        1 for e in events
+        if e.category in ("Young", "Mixed")
+        and "g1 humongous allocation" in ((e.raw_body or "") + " " + (e.cause or "")).lower()
+    )
+    th = RULE_DEFINITIONS["g1_humongous_allocation"]["thresholds"]
+    if humongous_count < th["min_count"]:
+        return []
+    severity = "high" if humongous_count >= th["high_count"] else "medium"
+    return [_make_finding(
+        "g1_humongous_allocation", severity,
+        "G1 Humongous Allocation 频繁",
+        "Frequent G1 Humongous Allocation",
+        f"频繁的大对象分配 {humongous_count} 次, G1 需为每个 humongous object 分配完整 region, "
+        f"可能造成老年代碎片化和 Full GC",
+        f"Frequent large-object allocation ({humongous_count} times) — "
+        f"G1 allocates a full region per humongous object, "
+        f"can fragment Old Gen and trigger Full GC",
+    )]
 
 
 def _rule_g1_mixed_ineffective(events, collector, stats) -> List[Dict[str, Any]]:
@@ -507,20 +755,70 @@ def _rule_cms_fragmentation(events, collector, stats) -> List[Dict[str, Any]]:
 # =============================================================================
 
 
+def _has_nonzero_allocation_stall(text: str) -> bool:
+    """Check if any 'Allocation Stall(s)' line in text has a non-zero value.
+
+    ZGC logs report allocation stalls in three distinct forms:
+      Pattern A: per-phase tracking, e.g. "Y: Allocation Stalls: 0 19 0 0"
+                 (4 numbers: Mark Start / Mark End / Relocate Start / Relocate End)
+      Pattern B: stats summary, e.g. "Critical: Allocation Stall 0.000 / 0.000"
+                 (slash-separated totals per phase)
+      Pattern C: event cause, e.g. cause="Allocation Stall" (sync mode event)
+
+    Plain substring "allocation stall" matching fires on Pattern A / B header
+    text even when all values are zero, producing false positives on every
+    ZGC log (production report gc-jdk25-zgc-finagle-http.log: 63 cycles,
+    all zero, yet old rule fired). This helper requires at least one non-zero
+    digit before declaring a stall.
+    """
+    # Pattern A: "Allocation Stalls: 0 19 0 0" — capture numbers after colon
+    for nums_str in re.findall(r"allocation stalls?:\s*([\d\s]+?)(?:\n|$)", text):
+        nums = [int(x) for x in nums_str.split() if x.isdigit()]
+        if any(n > 0 for n in nums):
+            return True
+    # Pattern B: "Critical: Allocation Stall X.000 / Y.000 ..." — capture total
+    for m in re.finditer(
+        r"critical:\s*allocation stall[^\n]*?(\d+(?:\.\d+)?)\s*/\s*\d+(?:\.\d+)?",
+        text,
+    ):
+        if float(m.group(1)) > 0:
+            return True
+    # Pattern C: singular "Allocation Stall" without trailing 's' or ':' — sync mode.
+    # Exclude when preceded by "critical:" (already handled by Pattern B) and
+    # when preceded by "y:" or "o:" prefix on per-phase tracking lines
+    # (e.g. "Y: Allocation Stalls: 0 0 0 0" — plural form, handled by Pattern A).
+    if re.search(r"(?<!critical:\s)\b(?:y:|o:)?\s*\ballocation stall\b(?!s|:)", text):
+        return True
+    return False
+
+
 def _rule_zgc_allocation_stall(events, collector, stats) -> List[Dict[str, Any]]:
     if collector != "Z":
         return []
     findings = []
     for e in events:
         text = ((e.cause or "") + " " + (e.raw_body or "")).lower()
-        if "allocation stall" in text:
-            findings.append(_make_finding(
+        if _has_nonzero_allocation_stall(text):
+            finding = _make_finding(
                 "zgc_allocation_stall", "high",
                 "ZGC 出现 Allocation Stall",
                 "ZGC allocation stall",
                 f"ZGC 分配被 GC 阻塞 (Allocation Stall), 堆空间不足无法满足分配请求",
                 f"ZGC allocation stall — heap cannot satisfy allocation request, ZGC sync mode engaged",
-            ))
+            )
+            # Surface the specific triggering event so the frontend can show
+            # "GC(N) at uptime Xs" instead of just the aggregate finding.
+            # Critical for incident triage: user needs to know WHICH GC stalled,
+            # not just that one did.
+            finding["event"] = {
+                "id": e.id,
+                "uptime_sec": e.uptime_sec,
+                "absolute_epoch_ms": e.absolute_epoch_ms,
+                "category": e.category,
+                "cause": e.cause or "",
+                "duration_ms": e.duration_ms,
+            }
+            findings.append(finding)
             break
     return findings
 
@@ -574,10 +872,14 @@ def _rule_zgc_concurrent_cycle_failure(events, collector, stats) -> List[Dict[st
 RULES: List[Tuple[Optional[str], Callable]] = [
     ("G1", _rule_g1_full_gc),
     ("G1", _rule_g1_mixed_ineffective),
+    ("G1", _rule_g1_compaction_pause),
+    (None, _rule_evacuation_failure),
+    ("G1", _rule_g1_humongous_allocation),
     (None, _rule_throughput_low),
     (None, _rule_stw_time_ratio_high),
     (None, _rule_gc_frequency_high),
     (None, _rule_reclaim_low),
+    (None, _rule_explicit_gc_called),
     (None, _rule_single_pause_long),
     # CMS-specific
     ("CMS", _rule_cms_concurrent_mode_failure),
@@ -607,8 +909,23 @@ RULES: List[Tuple[Optional[str], Callable]] = [
 # - cms_fragmentation (Full GC + heap has space) → leak
 _LEAK_RULES = {"heap_floor_rising", "reclaim_declining", "g1_mixed_ineffective", "post_gc_high_usage",
               "cms_fragmentation", "reclaim_low"}
-_OOM_RULES = {"oom_critical", "alloc_failure_full", "reclaim_low",
-              "zgc_allocation_stall", "zgc_concurrent_cycle_failure"}
+# Note: g1_compaction_pause and evacuation_failure are NOT in _LEAK_RULES.
+# Both indicate heap pressure (which could be transient bursts, cache warmup,
+# or allocation spikes), but not necessarily a leak. leak_risk is therefore
+# determined only by g1_mixed_ineffective + reclaim_low — the conservative
+# signal pattern. To avoid false-positive leak alerts, we keep
+# compaction/evacuation out of _LEAK_RULES and let them surface as
+# performance findings only.
+# Note: zgc_allocation_stall and zgc_concurrent_cycle_failure are NOT in _OOM_RULES.
+# Per user principle "OOM = Full GC + cannot reclaim memory":
+# - zgc_allocation_stall alone indicates heap pressure (ZGC may still be reclaiming
+#   effectively; issue is allocation rate outpacing ZGC's collection speed).
+#   Only when paired with reclaim_low (actual failure to reclaim) does it escalate
+#   to OOM (handled by cross-rule escalation below).
+# - zgc_concurrent_cycle_failure similarly — performance signal unless paired with
+#   reclaim_low. Keeping these out of _OOM_RULES avoids false-positive OOM alerts
+#   when ZGC is operating normally under high allocation rate.
+_OOM_RULES = {"oom_critical", "alloc_failure_full", "reclaim_low"}
 
 
 def _rollup_risks(findings: List[Dict[str, Any]]) -> Dict[str, str]:
@@ -642,6 +959,16 @@ def _rollup_risks(findings: List[Dict[str, Any]]) -> Dict[str, str]:
     if has_g1_full_high and has_reclaim_any and oom_risk != "high":
         oom_risk = "high"
 
+    # ZGC analog: if zgc_allocation_stall or zgc_concurrent_cycle_failure is high
+    # AND reclaim_low fires (heap can't actually reclaim memory), bump oom_risk to high.
+    has_zgc_oom_signal = any(
+        f["rule"] in ("zgc_allocation_stall", "zgc_concurrent_cycle_failure")
+        and f["severity"] == "high"
+        for f in findings
+    )
+    if has_zgc_oom_signal and has_reclaim_any and oom_risk != "high":
+        oom_risk = "high"
+
     # Mutual exclusion: leak_risk and oom_risk describe sequential states
     # (OOM is the terminal state, leak is the warning). If both could be
     # reported, OOM wins and leak collapses to "none" — there's no point
@@ -665,12 +992,12 @@ def _rollup_risks(findings: List[Dict[str, Any]]) -> Dict[str, str]:
 # - reclaim_low alone = leak (heap can't reclaim, but no explicit Full GC)
 # - reclaim_low is now in BOTH leak and oom (mutual exclusion decides which)
 # - CMS rules → performance (CMS designed to allow Full GC fallback)
-# - ZGC allocation_stall + cycle_failure → oom (ZGC's hard fallback signals)
+# - ZGC allocation_stall + cycle_failure → performance alone (heap pressure)
+#   OOM only via cross-rule escalation when paired with reclaim_low
 # - cms_fragmentation → leak (Full GC + heap has space = resource fragmentation)
 _EVIDENCE_RULES = {
     "oom": {
         "reclaim_low", "alloc_failure_full",
-        "zgc_allocation_stall", "zgc_concurrent_cycle_failure",
     },
     "leak": {
         "g1_mixed_ineffective", "reclaim_low", "cms_fragmentation",
@@ -679,6 +1006,11 @@ _EVIDENCE_RULES = {
         "throughput_low", "gc_frequency_high", "stw_time_ratio_high", "single_pause_long",
         "g1_full_gc", "cms_remark_too_long",
         "cms_concurrent_mode_failure", "cms_promotion_failed",
+        # Heap pressure signals (NOT leak — could be transient bursts)
+        "g1_compaction_pause", "evacuation_failure",
+        # ZGC hard fallback signals: alone = performance, paired with reclaim_low
+        # is escalated to oom via cross-rule logic in _rollup_risks.
+        "zgc_allocation_stall", "zgc_concurrent_cycle_failure",
     },
 }
 
@@ -688,6 +1020,9 @@ _ROOT_CAUSE_SUMMARY = {
         "label_en": "OOM imminent",
         "summary_zh": "堆已无法回收有效空间 (G1 退化到 Full GC) 或回收率过低",
         "summary_en": "Heap can no longer reclaim space (G1 fallback to Full GC or low reclaim ratio)",
+        # ZGC-specific OOM (when zgc_allocation_stall + reclaim_low co-occur)
+        "summary_zh_zgc": "ZGC 进入 sync mode (Allocation Stall) 且回收率过低, 堆无法回收也无法满足分配",
+        "summary_en_zgc": "ZGC entered sync mode (allocation stall) AND reclaim ratio too low, heap cannot reclaim or satisfy allocation",
     },
     "leak": {
         "label_zh": "内存泄漏",
@@ -710,7 +1045,8 @@ _ROOT_CAUSE_SUMMARY = {
 }
 
 
-def _compute_root_cause(risks: Dict[str, str], findings: List[Dict[str, Any]]) -> Dict[str, str]:
+def _compute_root_cause(risks: Dict[str, str], findings: List[Dict[str, Any]],
+                        collector: str = "") -> Dict[str, str]:
     """Determine the primary diagnosis (oom / leak / performance / healthy).
 
     Uses the existing risk rollup as ground truth:
@@ -718,6 +1054,9 @@ def _compute_root_cause(risks: Dict[str, str], findings: List[Dict[str, Any]]) -
       - leak_risk high/medium → Leak  (already mutually exclusive with oom)
       - any other finding present → Performance
       - nothing → Healthy
+
+    Summary text uses a collector-specific variant for OOM when available
+    (e.g., ZGC Allocation Stall + reclaim_low).
     """
     if risks.get("oom_risk") in ("high", "medium"):
         category = "oom"
@@ -728,12 +1067,20 @@ def _compute_root_cause(risks: Dict[str, str], findings: List[Dict[str, Any]]) -
     else:
         category = "healthy"
     summary = _ROOT_CAUSE_SUMMARY[category]
+    # Use collector-specific summary if available
+    summary_key = f"summary_{'en' if True else 'zh'}_{collector.lower()}" \
+        if collector and f"summary_en_{collector.lower()}" in summary else None
+    summary_zh = summary["summary_zh"]
+    summary_en = summary["summary_en"]
+    if collector and f"summary_en_{collector.lower()}" in summary:
+        summary_zh = summary.get(f"summary_zh_{collector.lower()}", summary_zh)
+        summary_en = summary[f"summary_en_{collector.lower()}"]
     return {
         "category": category,
         "label_zh": summary["label_zh"],
         "label_en": summary["label_en"],
-        "summary_zh": summary["summary_zh"],
-        "summary_en": summary["summary_en"],
+        "summary_zh": summary_zh,
+        "summary_en": summary_en,
     }
 
 
@@ -825,7 +1172,10 @@ def _generate_recommendations(
                  "考虑增大 -Xmx 或降低 -XX:InitiatingHeapOccupancyPercent 以提前触发 Mixed GC",
                  "Consider increasing -Xmx or lowering -XX:InitiatingHeapOccupancyPercent to trigger Mixed GC earlier",
                  ["g1_full_gc", "reclaim_low"])
-        else:
+        elif "reclaim_low" in fired_rules:
+            # Only show this for non-G1 collectors when reclaim_low actually fired.
+            # Otherwise the ZGC/CMS-specific recommendation above already covers
+            # the situation without falsely attributing to a leak signal.
             _add("tuning",
                  "考虑增大 -Xmx 堆容量, 并排查是否存在内存泄漏导致堆压力",
                  "Consider increasing -Xmx and investigate potential memory leaks causing heap pressure",
@@ -851,6 +1201,17 @@ def _generate_recommendations(
                  ["cms_fragmentation"])
 
     elif category == "performance":
+        # DisableExplicitGC: when explicit_gc_called fires, recommend the
+        # collector-agnostic JVM flag. This is the most actionable advice
+        # for manual Full GC triggers (more useful than collector tuning
+        # which doesn't address the root cause: application code calling
+        # System.gc()). Applies to all collectors.
+        if "explicit_gc_called" in fired_rules:
+            _add("tuning",
+                 "应用代码中调用了 System.gc(). 生产环境应启用 -XX:+DisableExplicitGC 禁用显式 GC 调用 (除非 RMI/JMX 等场景需要). 同步建议查找代码中 System.gc() 的调用位置并评估是否必要",
+                 "Application code called System.gc(). Production should enable -XX:+DisableExplicitGC to disable explicit GC (unless RMI/JMX requires it). Find and review every System.gc() call in the codebase",
+                 ["explicit_gc_called"])
+
         if "gc_frequency_high" in fired_rules:
             if collector == "G1":
                 _add("tuning",
@@ -1035,8 +1396,7 @@ def _detect_oom_candidates(events) -> List[Dict[str, Any]]:
     return []
 
 
-def _diagnose_memory(events, collector, heap_max_mb=None, max_heap_usage_pct=None,
-                     avg_heap_usage_pct=None, by_category=None, **kwargs):
+def _diagnose_memory(events, collector, *args, **kwargs):
     """Dispatch each rule function and aggregate results.
 
     New output structure (root-cause oriented):
@@ -1046,29 +1406,18 @@ def _diagnose_memory(events, collector, heap_max_mb=None, max_heap_usage_pct=Non
       recommendations: tiered list (immediate / short_term / tuning / profiling)
       rule_definitions, oom_candidates: unchanged
 
-    Supports three call styles:
-      - Legacy positional: _diagnose_memory(events, collector, heap_max_mb, max_heap_usage_pct, avg_heap_usage_pct, by_category)
-      - Keyword:          _diagnose_memory(events, collector, by_category={...}, throughput=..., ...)
-      - Stats dict:      _diagnose_memory(events, collector, stats_dict)
+    Supports two call styles:
+      - New:    _diagnose_memory(events, collector, stats)
+      - Legacy: _diagnose_memory(events, collector, heap_max_mb=..., ...)
     """
-    # Stats dict (newest interface)
-    if heap_max_mb is not None and isinstance(heap_max_mb, dict):
-        stats = heap_max_mb
+    if args and isinstance(args[0], dict):
+        stats = args[0]
     else:
-        # Positional or keyword args (legacy interface)
-        if heap_max_mb is None and "heap_max_mb" in kwargs:
-            heap_max_mb = kwargs["heap_max_mb"]
-        if max_heap_usage_pct is None and "max_heap_usage_pct" in kwargs:
-            max_heap_usage_pct = kwargs["max_heap_usage_pct"]
-        if avg_heap_usage_pct is None and "avg_heap_usage_pct" in kwargs:
-            avg_heap_usage_pct = kwargs["avg_heap_usage_pct"]
-        if by_category is None:
-            by_category = kwargs.get("by_category", {}) or {}
         stats = {
-            "heap_max_mb": heap_max_mb,
-            "max_heap_usage_pct": max_heap_usage_pct,
-            "avg_heap_usage_pct": avg_heap_usage_pct,
-            "by_category": by_category,
+            "heap_max_mb": kwargs.get("heap_max_mb"),
+            "max_heap_usage_pct": kwargs.get("max_heap_usage_pct"),
+            "avg_heap_usage_pct": kwargs.get("avg_heap_usage_pct"),
+            "by_category": kwargs.get("by_category", {}),
             "throughput": kwargs.get("throughput"),
             "events_per_minute": kwargs.get("events_per_minute"),
             "duration_sec": kwargs.get("duration_sec"),
@@ -1082,7 +1431,7 @@ def _diagnose_memory(events, collector, heap_max_mb=None, max_heap_usage_pct=Non
             findings.extend(fn(events, collector, stats))
 
     risks = _rollup_risks(findings)
-    root_cause = _compute_root_cause(risks, findings)
+    root_cause = _compute_root_cause(risks, findings, collector=collector)
     evidence, symptoms = _categorize_findings(findings, root_cause["category"])
     recommendations = _generate_recommendations(
         root_cause["category"], collector, {f["rule"] for f in findings},
@@ -1098,12 +1447,17 @@ def _diagnose_memory(events, collector, heap_max_mb=None, max_heap_usage_pct=Non
         "recommendations": recommendations,
         "rule_definitions": RULE_DEFINITIONS,
         "oom_candidates": _detect_oom_candidates(events),
-        # Backward-compat shim: flat findings + plain recommendations arrays so
-        # older callers (and tests) that read result["findings"] / ["recommendations_zh"]
-        # keep working.
-        "findings": evidence + symptoms,
-        "recommendations_zh": [r["action_zh"] for r in recommendations],
-        "recommendations_en": [r["action_en"] for r in recommendations],
+    }
+
+    return {
+        **risks,
+        "collector": collector,
+        "root_cause": root_cause,
+        "evidence": evidence,
+        "symptoms": symptoms,
+        "recommendations": recommendations,
+        "rule_definitions": RULE_DEFINITIONS,
+        "oom_candidates": _detect_oom_candidates(events),
     }
 
 

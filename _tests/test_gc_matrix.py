@@ -35,14 +35,14 @@ GC_FIXTURES = {
     "gc-jdk17-zgc.log": {"jdk": "9+", "collector": "Z", "required": {"ZGC", "Concurrent"}, "allowed": {"ZGC", "Concurrent", "Other"}},
 
     "gc-jdk21-g1.log": {"jdk": "9+", "collector": "G1", "required": {"Young"}, "allowed": {"Young", "Mixed", "InitialMark", "Concurrent", "Remark", "Cleanup", "Full"}},
-    "gc-jdk21-generational-zgc.log": {"jdk": "9+", "collector": "Z", "required": {"ZGC", "Concurrent", "Young"}, "allowed": {"ZGC", "Concurrent", "Other", "Young"}},
+    "gc-jdk21-generational-zgc.log": {"jdk": "9+", "collector": "Z", "required": {"ZGC", "Concurrent"}, "allowed": {"ZGC", "Concurrent", "Other", "Young"}},
     "gc-jdk21-parallel.log": {"jdk": "9+", "collector": "Parallel", "required": {"Young"}, "allowed": {"Young", "Full"}},
     "gc-jdk21-serial.log": {"jdk": "9+", "collector": "Serial", "required": {"Young"}, "allowed": {"Young", "Full"}},
     "gc-jdk21-shenandoah.log": {"jdk": "9+", "collector": "Shenandoah", "required": {"Shenandoah"}, "allowed": {"Shenandoah", "Concurrent", "Other", "Full"}},
     "gc-jdk21-zgc.log": {"jdk": "9+", "collector": "Z", "required": {"ZGC", "Concurrent"}, "allowed": {"ZGC", "Concurrent", "Other"}},
 
     "gc-jdk25-g1.log": {"jdk": "9+", "collector": "G1", "required": {"Young"}, "allowed": {"Young", "Mixed", "InitialMark", "Concurrent", "Remark", "Cleanup", "Full"}},
-    "gc-jdk25-generational-zgc.log": {"jdk": "9+", "collector": "Z", "required": {"ZGC", "Concurrent", "Young"}, "allowed": {"ZGC", "Concurrent", "Other", "Young"}},
+    "gc-jdk25-generational-zgc.log": {"jdk": "9+", "collector": "Z", "required": {"ZGC", "Concurrent"}, "allowed": {"ZGC", "Concurrent", "Other", "Young"}},
     "gc-jdk25-parallel.log": {"jdk": "9+", "collector": "Parallel", "required": {"Young"}, "allowed": {"Young", "Full"}},
     "gc-jdk25-serial.log": {"jdk": "9+", "collector": "Serial", "required": {"Young"}, "allowed": {"Young", "Full"}},
     "gc-jdk25-shenandoah.log": {"jdk": "9+", "collector": "Shenandoah", "required": {"Shenandoah"}, "allowed": {"Shenandoah", "Concurrent", "Other", "Full"}},

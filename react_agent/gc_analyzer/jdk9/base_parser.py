@@ -106,11 +106,12 @@ def _classify(full_type: str) -> Tuple[str, str, bool]:
         else:
             cause = s
             base = s
-    # Generational ZGC has Y:/O: prefix, e.g. "Y: Pause Mark Start"
-    normalized_base = re.sub(r"^[YO]:\s+", "", base).strip()
+    # Generational ZGC has Y:/O: prefix (uppercase, JDK21+ legacy) or y:/o: (lowercase, JDK25+).
+    # Both forms must be detected as ZGC generational phases.
+    normalized_base = re.sub(r"^[YyOo]:\s+", "", base).strip()
     sl = normalized_base.lower()
     raw_lower = s.lower()
-    has_z_generation_prefix = bool(re.match(r"^[YO]:\s+", base))
+    has_z_generation_prefix = bool(re.match(r"^[YyOo]:\s+", base))
     is_concurrent = sl.startswith("concurrent")
     cat = "Other"
     # 优先级：Full > Mixed > Young > ZGC pause > Shenandoah > Remark > Cleanup > InitialMark > Concurrent

@@ -1,0 +1,7 @@
+[0.005s][info][gc] Using G1
+[0.010s][info][gc,init] Heap Max Capacity: 512M
+[5.000s][info][gc] GC(0) Pause Full (Allocation Failure) 490M->485M(512M) 150.0ms
+[13.000s][info][gc] GC(1) Pause Full (Allocation Failure) 490M->485M(512M) 150.0ms
+[21.000s][info][gc] GC(2) Pause Full (Allocation Failure) 490M->485M(512M) 150.0ms
+[29.000s][info][gc] GC(3) Pause Full (Allocation Failure) 490M->485M(512M) 150.0ms
+[37.000s][info][gc] GC(4) Pause Full (Allocation Failure) 490M->485M(512M) 150.0ms
