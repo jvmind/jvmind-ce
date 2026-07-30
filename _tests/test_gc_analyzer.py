@@ -3024,5 +3024,51 @@ def test_g1_full_gc_manual_breakdown_includes_jvmti_and_whitebox():
     assert "whitebox" in g1["detail_en"].lower()
 
 
+def test_jdk8_gc_with_continuation_lines_becomes_event():
+    """回归: 多个延续行（[SoftReference, ...] [Times: ...]）合并后，事件仍正确解析。
+
+    Bug 修复前: 当 [GC (cause) heap_data] 之后跟随多个延续行（[SoftReference, ...]、
+    [WeakReference, ...]、[Times: ...] 等），_preprocess_lines 合并后的事件在 dispatch
+    中被错误丢弃 — `all_gen_names` 为空时 step 5 (generational) 跳过，事件被丢失。
+    这影响 PrintGCDetails + PrintReferenceGC + PrintGCApplicationStoppedTime 共存的 log。
+    """
+    log = """CommandLine flags: -XX:+PrintGC -XX:+PrintGCDetails -XX:+UseParallelGC
+2026-07-29T15:00:00.000+0800: 0.010: [GC (Allocation Failure)  100M->50M(1024M), 0.123 secs]
+   [SoftReference, 0 refs, 0.0000160 secs]
+   [WeakReference, 1 refs, 0.0000123 secs]
+   [FinalReference, 0 refs, 0.0000078 secs]
+   [PhantomReference, 0 refs, 0.0000043 secs]
+   [JNI Weak Reference, 0.0000089 secs]
+   [Times: user=0.10 sys=0.00, real=0.12 secs]
+"""
+    stats = analyze(log)
+    assert stats["jdk_version"] == "8"
+    assert stats["collector"] == "Parallel", f"expected Parallel, got {stats['collector']}"
+    assert stats["events_total"] == 1, \
+        f"expected 1 event, got {stats['events_total']}: {stats.get('by_category', {})}"
+    # Verify the event has correct cause and heap data
+    from react_agent.gc_analyzer import parse_gc_log
+    parsed = parse_gc_log(log)
+    assert parsed["events"][0].cause == "Allocation Failure"
+    assert parsed["events"][0].heap_before_mb == 100.0
+    assert parsed["events"][0].heap_after_mb == 50.0
+    assert parsed["events"][0].heap_total_mb == 1024.0
+    assert abs(parsed["events"][0].duration_ms - 123.0) < 0.5
+
+
+def test_jdk8_gc_no_continuation_lines_becomes_event():
+    """回归: 简单的 [GC (cause) heap] 单行也必须被解析为事件。
+
+    Bug 修复前: 没有延续行时，body 直接是 [GC (cause) heap data secs]。
+    `all_gen_names` 为空（无 [ParNew]/[PSYoungGen] 等子事件）→ step 5 跳过。
+    """
+    log = """CommandLine flags: -XX:+PrintGC -XX:+PrintGCDetails -XX:+UseParallelGC
+2026-07-29T15:00:00.000+0800: 0.010: [GC (Allocation Failure)  100M->50M(1024M), 0.123 secs]
+"""
+    stats = analyze(log)
+    assert stats["events_total"] == 1, \
+        f"expected 1 event, got {stats['events_total']}"
+
+
 if __name__ == "__main__":
     main()

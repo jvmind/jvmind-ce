@@ -1055,7 +1055,7 @@
   border: 1px solid var(--border); border-radius: 4px;
   background: transparent; color: var(--text-dim); cursor: pointer;
   transition: all 0.15s;
-  display: inline-flex; align-items: center; gap: 3px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 3px;
   white-space: nowrap; overflow: hidden;
 }
 .sidebar-batch-bar button:hover,

@@ -460,3 +460,69 @@ def test_large_fixture_response_size_is_bounded(auth_client):
     assert detail.status_code == 200
     assert len(detail.content) < len(payload) // 2
     assert "events" not in detail.json()["stats"]
+
+def test_upload_error_message_mentions_print_app_stopped_time(auth_client):
+    """User scenario: log has PrintGCApplicationStoppedTime content.
+
+    PrintGCApplicationStoppedTime is a JDK8 flag. In JDK8 it produces
+    `[Times: user=X sys=Y, real=Z secs]` continuation lines merged into GC
+    events. In JDK9+ the equivalent is `[gc,cpu] GC(N) User=Xs ...` lines.
+    Both are handled by the parser — they should NOT cause 0 events unless
+    the log really has no GC events.
+    """
+    client, _user = auth_client
+    sid = _create_session(client)
+    # A log with ONLY config/init lines, no actual GC events
+    # PrintGCApplicationStoppedTime output alone shouldn't form events
+    log_content = (
+        b"[0.010s][info][gc,init] CardTable entry size: 512\n"
+        b"[0.011s][info][gc,init] CPUs: 24 total, 24 available\n"
+        b"[0.012s][info][gc,init] Memory: 15855M\n"
+        b"[0.013s][info][gc] Using G1\n"
+        b"[0.014s][info][gc,init] Heap Max Capacity: 1024M\n"
+    )
+    r = _upload_gc(client, sid, "init-only.log", log_content)
+    assert r.status_code == 422
+    # The error message should mention PrintGCApplicationStoppedTime so
+    # users familiar with that flag can find the relevant documentation.
+    body = r.text
+    assert "PrintGCApplicationStoppedTime" in body
+
+
+def test_upload_error_message_surfaces_gc_like_lines(auth_client):
+    """User scenario: log has 5 init lines then GC events at line 15+ but parser fails.
+
+    Diagnostic: when no events are parsed, surface any line that contains
+    'GC(' or '[Full GC' as a hint that the parser might have missed them
+    due to a format issue. This helps users with logs that look GC-like
+    but don't match the parser's expected format.
+    """
+    client, _user = auth_client
+    sid = _create_session(client)
+    # 14 init lines, then a GC-like line that has GC( but doesn't match the parser
+    # (e.g., missing heap data or using a non-standard format)
+    log_content = b"\n".join([
+        b"[0.010s][info][gc,init] CardTable entry size: 512",
+        b"[0.011s][info][gc,init] CPUs: 24 total, 24 available",
+        b"[0.012s][info][gc,init] Memory: 15855M",
+        b"[0.013s][info][gc,init] Heap Min Capacity: 256M",
+        b"[0.014s][info][gc,init] Heap Initial Capacity: 1024M",
+        b"[0.015s][info][gc,init] Heap Max Capacity: 4096M",
+        b"[0.016s][info][gc,init] Heap Region Size: 4M",
+        b"[0.017s][info][gc,init] Pre-touch: Disabled",
+        b"[0.018s][info][gc,init] Parallel Workers: 18",
+        b"[0.019s][info][gc,init] Concurrent Workers: 5",
+        b"[0.020s][info][gc] Using G1",
+        b"[0.021s][info][gc,init] Heap Region Size: 4M",
+        b"[0.022s][info][gc,init] Periodic GC: Disabled",
+        b"[0.023s][info][gc,init] CardTable entry size: 512",
+        # This is a "GC-like" line that has GC( but doesn't have the
+        # standard heap data format — the parser should surface it as a hint
+        b"[0.024s][info][gc,start] GC(0) Pause Young (this line is missing the main event)",
+    ])
+    r = _upload_gc(client, sid, "truncated-or-bad-format.log", log_content)
+    assert r.status_code == 422
+    body = r.text
+    # The new diagnostic should surface the GC-like line
+    assert "GC(" in body
+    assert "look like GC events" in body or "GC 关键字" in body

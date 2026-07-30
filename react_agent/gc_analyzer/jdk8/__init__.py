@@ -320,13 +320,37 @@ def parse_gc_log_jdk8(text: str) -> Dict:
                     heap_max_mb = heap_mb
             i += 1
             continue
+        elif _RE_HEAP.search(body):
+            # Fallback: no generation subevent in line (e.g. log without
+            # PrintGCDetails, or [Times: ...] merged onto a line that lost
+            # its subevent). Body has [GC (cause) ... heap data ...] and no
+            # [ParNew]/[CMS]/[PSYoungGen] subevent — still a real GC event.
+            # Treat as generational Young GC unless [Full GC] prefix.
+            has_full_prefix = bool(re.search(r"\[Full\s+GC", body))
+            m_cause = _RE_GC_CAUSE.search(body)
+            cause = m_cause.group(1) if m_cause else ""
+            # Default to Parallel/Serial if Cause-based detection doesn't pin it down;
+            # collector inference below will refine via CommandLine flags.
+            ev = generational.parse_generational_gc(body, has_full_prefix, cause, uptime, abs_epoch_ms)
+            if ev:
+                ev.id = event_id
+                event_id += 1
+                events.append(ev)
+                parsed += 1
+                heap_mb = ev.heap_total_mb
+                if heap_mb > 0 and (heap_max_mb is None or heap_mb > heap_max_mb):
+                    heap_max_mb = heap_mb
+            i += 1
+            continue
         else:
             # nothing matched, just consume this line
             i += 1
             continue
 
     # Collector inference
-    # Check command line flags first - they override generation-based detection
+    # Check command line flags first - they override generation-based detection.
+    # Note: -XX:+ flags have multiple spellings (e.g. UseParallelGC, UseParallelOldGC,
+    # UseParallelNewGC). Match the most common forms.
     for line in lines:
         if "UseConcMarkSweepGC" in line:
             collector = "CMS"
@@ -335,6 +359,18 @@ def parse_gc_log_jdk8(text: str) -> Dict:
         for line in lines:
             if "UseG1GC" in line:
                 collector = "G1"
+                break
+    if collector is None:
+        # Parallel GC (any spelling)
+        for line in lines:
+            if ("UseParallelGC" in line or "UseParallelOldGC" in line
+                    or "UseParallelNewGC" in line):
+                collector = "Parallel"
+                break
+    if collector is None:
+        for line in lines:
+            if "UseSerialGC" in line:
+                collector = "Serial"
                 break
     # If still not detected, infer from generation names
     if collector is None:

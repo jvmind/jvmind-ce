@@ -18,26 +18,46 @@ from .jdk8 import parse_gc_log_jdk8
 
 def parse_gc_log(text: str) -> Dict:
     """Parse GC log text, automatically detect JDK version format.
-    
+
     JDK8 format detection rules:
     - Line doesn't start with [ and contains [GC / [Full GC → JDK8
     - Starts directly with [GC or [Full GC (not Worker/Thread) → JDK8
+    - Line contains a JDK8 generational subevent marker [ParNew: / [PSYoungGen: /
+      [DefNew: / [Tenured: / [CMS: / [ParOldGen: / [PSOldGen: / [PSPermGen:
+      (these markers only appear in JDK8 logs as inline heap subevent delimiters)
     Otherwise use JDK9+ unified parsing.
+
+    Note: auto-detection scans a window of 200 non-empty lines (was 10). The
+    10-line window failed for logs that have many safepoint-only lines first
+    (e.g. -XX:+PrintGCApplicationStoppedTime outputs only "Total time for
+    which application threads were stopped" lines until a real GC fires).
+    200 is generous enough to find the first GC event in any realistic log
+    while keeping the O(n) scan bounded.
     """
-    # Auto-detect format by checking first 10 non-empty lines
+    # Auto-detect format by checking a window of non-empty lines
     _count = 0
+    _WINDOW = 200
     for _line in text.splitlines():
         _l = _line.strip()
         if not _l:
             continue
         _count += 1
-        if _count > 10:
+        if _count > _WINDOW:
             break
         # JDK8 detection
         if not _l.startswith("[") and re.search(r"\[(?:Full )?GC\s", _l) and re.match(r"^[^[\s]", _l):
             return parse_gc_log_jdk8(text)
         if (_l.startswith("[GC ") or _l.startswith("[Full GC ")) and not re.match(
             r"\[(?:Full )?GC\s+(?:Worker|Thread)", _l
+        ):
+            return parse_gc_log_jdk8(text)
+        # JDK8 generational subevent markers (inline heap subevent delimiters).
+        # These only appear in JDK8 legacy format logs (PrintGCDetails output).
+        # If we see one within the window, the file is JDK8 even if the first
+        # GC event is past the 10-line boundary.
+        if re.search(
+            r"\[(ParNew|PSYoungGen|DefNew|Tenured|CMS|ParOldGen|PSOldGen|PSPermGen):",
+            _l,
         ):
             return parse_gc_log_jdk8(text)
 

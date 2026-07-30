@@ -97,7 +97,78 @@ async def upload_gc_log(request: Request, sid: str, file: UploadFile = File(...)
         raise HTTPException(400, f"GC 日志解析失败: {e} / GC log parse failed: {e}")
 
     if stats["events_total"] == 0:
-        raise HTTPException(422, "未能解析出任何 GC 事件。请确认日志格式正确。\nJDK9+ 格式示例：[12.345s][info][gc] ...\nJDK8 格式示例：12.345: [GC (Allocation Failure) ... / No GC events parsed. Check log format.\nJDK9+ example: [12.345s][info][gc] ...\nJDK8 example: 12.345: [GC (Allocation Failure) ...")
+        # Build a small diagnostic preview from the first non-empty lines so the
+        # user can verify the file format. Capped at 5 lines × 80 chars to avoid
+        # huge error payloads.
+        preview_lines = []
+        for line in text.splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            preview_lines.append(s[:80])
+            if len(preview_lines) >= 5:
+                break
+        # If the first 5 lines are all init/config and the user reports
+        # GC events later in the file, also surface any line that LOOKS like
+        # a GC event but didn't match the parser. This catches format issues
+        # that prevent the parser from creating events even when "GC(" is
+        # present in the line.
+        gc_like_lines = []
+        for line in text.splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            if ("GC(" in s) or ("[Full GC" in s) or ("[GC " in s and "Pause" in s):
+                gc_like_lines.append(s[:120])
+                if len(gc_like_lines) >= 3:
+                    break
+        preview = "\n".join(preview_lines) if preview_lines else "(空文件 / empty file)"
+        gc_hint = ""
+        if gc_like_lines:
+            gc_hint = (
+                "\n以下行包含 GC 关键字但未被识别为 GC 事件（可能是格式问题）:\n"
+                + "\n".join(gc_like_lines)
+                + "\nThese lines contain 'GC(' but did not match the parser. "
+                + "Check whether they follow the standard format.\n"
+            )
+        total_lines = stats.get("total_lines", 0)
+        parsed_lines = stats.get("parsed_lines", 0)
+        # Sample non-GC lines from later in the file too, so user can see
+        # what's in the rest of the file (in case the first 5 lines are
+        # misleading — e.g., safepoint-only prefix).
+        non_gc_sample = []
+        for line in text.splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            if "Total time for which application threads were stopped" in s:
+                non_gc_sample.append(s[:80])
+            if len(non_gc_sample) >= 2:
+                break
+        safepoint_hint = ""
+        if non_gc_sample:
+            safepoint_hint = (
+                "\n提示: 检测到 'Total time for which application threads were stopped' 行"
+                " (来自 -XX:+PrintGCApplicationStoppedTime)。这些 safepoint-only 行不构成 GC 事件，"
+                "实际 GC 事件必须包含 [ParNew: / [CMS: / [G1: 等子事件。\n"
+                "Hint: 'Total time for which application threads were stopped' lines are from "
+                "-XX:+PrintGCApplicationStoppedTime. These are safepoint-only and are NOT GC events. "
+                "Real GC events must contain [ParNew: / [CMS: / [G1: subevent.\n"
+            )
+        msg = (
+            "未能解析出任何 GC 事件 (共扫描 {total} 行, 仅识别 {parsed} 行)。\n"
+            "请确认日志格式正确（JDK9+ unified logging 或 JDK8 PrintGCDetails 格式）。\n"
+            "PrintGCApplicationStoppedTime 输出 (JDK8: [Times: ...] / JDK9+: [gc,cpu] GC(N) User=...) 不会单独形成事件，会被合并到 GC 事件的 raw_body 中。\n"
+            "文件前 5 行:\n{preview}\n"
+            "{gc_hint}"
+            "{safepoint_hint}"
+            "No GC events parsed (scanned {total} lines, identified {parsed}). "
+            "Check log format (JDK9+ unified logging or JDK8 PrintGCDetails). "
+            "PrintGCApplicationStoppedTime output ([Times: ...] in JDK8, [gc,cpu] GC(N) User=... in JDK9+) "
+            "is merged into the GC event's raw_body and does not create separate events. "
+            "First 5 lines of file:\n{preview}"
+        ).format(total=total_lines, parsed=parsed_lines, preview=preview, gc_hint=gc_hint, safepoint_hint=safepoint_hint)
+        raise HTTPException(422, msg)
 
     file_id = _uuid.uuid4().hex[:10]
 
