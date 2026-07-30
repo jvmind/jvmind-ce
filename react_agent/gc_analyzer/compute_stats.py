@@ -35,6 +35,17 @@ RULE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "applies_to": "all",
         "thresholds": {"avg_reclaim_ratio": 0.05, "min_events": 3},
     },
+    "alloc_failure_full": {
+        # Universal OOM signal — application requested memory that JVM
+        # could not satisfy after Full GC. Allocation Failure is a JVM-wide
+        # signal (appears in Parallel / G1 / CMS / Serial logs as the cause
+        # of the Full GC event, e.g. "Pause Full (Allocation Failure) 4096M->3680M").
+        # Per user principle "OOM = Full GC + cannot reclaim memory": post-GC
+        # heap still > 85% confirms heap is un-reclaimable → OOM imminent.
+        "category": "oom",
+        "applies_to": "all",
+        "thresholds": {"post_gc_pct": 0.85},
+    },
     "explicit_gc_called": {
         "category": "performance",
         "applies_to": "all",
@@ -96,6 +107,14 @@ RULE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "category": "performance",  # CMS 设计的 Full GC fallback; 配合 reclaim_low 才升级为 oom
         "applies_to": "CMS",
         "thresholds": {"min_count": 1},
+    },
+    "cms_full_gc": {
+        # CMS Full GC with cause breakdown. Same thresholds as g1_full_gc
+        # (Full GC count ≥ 3 → high; manual-only capped at medium).
+        "category": "performance",
+        "applies_to": "CMS",
+        "thresholds": {"n_count_high": 3},
+        "extra_signals": ["promotion_failed", "concurrent_mode_failure"],
     },
     "cms_promotion_failed": {
         "category": "performance",
@@ -203,14 +222,21 @@ def _is_manual_full_gc(event) -> bool:
     Manual triggers include:
     - System.gc() — application code explicitly calling System.gc()
     - Heap Dump Initiated GC — jmap -dump / jcmd GC.heap_dump
-    - Heap Inspection — jcmd inspection
+    - Heap Inspection — jcmd GC.heap_inspection / jcmd inspection
+    - Jvmti ForceGc — JVMTI ForceGarbageCollection (debugger attach)
+    - WhiteBox Initiated GC — HotSpot WhiteBox API `WB.fullGC()` (tests)
 
     These are NOT heap pressure signals; they should not contribute to
     Full GC frequency metrics (which indicate real heap pressure).
     """
     text = ((event.raw_body or "") + " " + (event.cause or "")).lower()
     return any(marker in text for marker in (
-        "system.gc()", "heap dump initiated gc", "heap inspection",
+        "system.gc()",
+        "heap dump initiated gc",
+        "heap inspection",
+        "jvmti forcegc",
+        "whitebox initiated gc",
+        "whitebox api gc",
     ))
 
 
@@ -313,17 +339,26 @@ def _rule_reclaim_low(events, collector, stats) -> List[Dict[str, Any]]:
             continue
         avg_freed = cat.get("avg_freed_mb", 0) or 0
         avg_before = cat.get("avg_pause_ms", 0)  # not used; we use raw events below
-        # Compute avg reclaim from raw events for accuracy
+        # Compute avg reclaim from raw events for accuracy.
+        # For Full GC: exclude manual triggers (jmap -dump / jcmd inspection /
+        # System.gc()). Manual GC happens when heap isn't pressured, so reclaim
+        # is naturally low — counting them inflates the false-positive OOM signal.
+        # Same fix pattern as _rule_gc_frequency_high and _rule_cms_fragmentation.
+        # For Mixed GC: not applicable — Mixed is G1's reclamation phase, never
+        # triggered manually.
         cat_events = [e for e in events
                       if e.category == cat_name
                       and e.heap_before_mb > 0
-                      and e.heap_after_mb >= 0]
+                      and e.heap_after_mb >= 0
+                      and not (cat_name == "Full" and _is_manual_full_gc(e))]
         if not cat_events:
             continue
         reclaims = [(e.heap_before_mb - e.heap_after_mb) / e.heap_before_mb
                     for e in cat_events
                     if e.heap_before_mb > 0]
         if not reclaims:
+            continue
+        if len(reclaims) < th["min_events"]:
             continue
         avg_reclaim = sum(reclaims) / len(reclaims)
         if avg_reclaim >= th["avg_reclaim_ratio"]:
@@ -439,11 +474,13 @@ def _rule_g1_full_gc(events, collector, stats) -> List[Dict[str, Any]]:
     extra_signals = []
     # Detect deliberate / manual Full GC triggers that should NOT be
     # misread as heap pressure. JVM emits these causes when the Full GC is
-    # the JVM's response to a heap dump / inspection request, or an explicit
-    # System.gc() call — the user did this on purpose, the pause is not a
-    # heap-health signal.
+    # the JVM's response to a heap dump / inspection request, JVMTI/WhiteBox
+    # explicit GC, or an explicit System.gc() call — the user did this on
+    # purpose, the pause is not a heap-health signal.
     manual_dump_count = 0
     manual_inspect_count = 0
+    manual_jvmti_count = 0
+    manual_whitebox_count = 0
     system_gc_count = 0
     metadata_gc_count = 0
     last_ditch_count = 0
@@ -456,6 +493,12 @@ def _rule_g1_full_gc(events, collector, stats) -> List[Dict[str, Any]]:
             # Matches both "Heap Inspection" (G1 modern) and "Heap Inspection
             # Initiated GC" (CMS classic). Both are user-triggered inspection.
             manual_inspect_count += 1
+        elif "jvmti forcegc" in rb_l:
+            # JVMTI ForceGarbageCollection (debugger attach) — user-initiated
+            manual_jvmti_count += 1
+        elif "whitebox initiated gc" in rb_l or "whitebox api gc" in rb_l:
+            # HotSpot WhiteBox API `WB.fullGC()` (used by benchmarks / tests)
+            manual_whitebox_count += 1
         elif "system.gc()" in rb_l or rb_l.strip() == "system.gc()":
             system_gc_count += 1
         elif "metadata gc threshold" in rb_l:
@@ -469,11 +512,13 @@ def _rule_g1_full_gc(events, collector, stats) -> List[Dict[str, Any]]:
             extra_signals.append("evacuation failure")
             break
 
-    # Aggregate: manual triggers (dump + inspect + System.gc()) are not
-    # heap pressure. Note: System.gc() is an application code call (not SRE
-    # operation like dump/inspect), so the dedicated explicit_gc_called
-    # rule will also fire separately with a code-smell recommendation.
-    manual_total = manual_dump_count + manual_inspect_count + system_gc_count
+    # Aggregate: manual triggers (dump + inspect + jvmti + whitebox + System.gc())
+    # are not heap pressure. JVMTI/WhiteBox are programmatic GC (debugger/tests),
+    # in spirit identical to System.gc() — user-initiated explicit invocation.
+    manual_total = (
+        manual_dump_count + manual_inspect_count + manual_jvmti_count
+        + manual_whitebox_count + system_gc_count
+    )
     # Non-manual = real heap pressure events
     non_manual = n_full - manual_total
 
@@ -484,6 +529,10 @@ def _rule_g1_full_gc(events, collector, stats) -> List[Dict[str, Any]]:
             causes.append("heap dump (jmap -dump / jcmd GC.heap_dump)")
         if manual_inspect_count:
             causes.append("heap inspection (jcmd inspection)")
+        if manual_jvmti_count:
+            causes.append("JVMTI ForceGc (debugger attach)")
+        if manual_whitebox_count:
+            causes.append("WhiteBox Initiated GC (test framework)")
         if system_gc_count:
             causes.append("System.gc() (application code call)")
         cause_text = " + ".join(causes)
@@ -495,8 +544,8 @@ def _rule_g1_full_gc(events, collector, stats) -> List[Dict[str, Any]]:
         title_en = "G1 Full GC triggered by manual operation"
         # Manual triggers are not heap pressure signals — cap severity at
         # medium even if count >= 3, so we don't escalate the OOM banner
-        # just because someone ran jmap / jcmd or application code called
-        # System.gc().
+        # just because someone ran jmap / jcmd / WhiteBox / JVMTI or
+        # application code called System.gc().
         if n_full >= RULE_DEFINITIONS["g1_full_gc"]["thresholds"]["n_count_high"]:
             severity = "medium"
     elif manual_total > 0 and non_manual > 0:
@@ -507,6 +556,10 @@ def _rule_g1_full_gc(events, collector, stats) -> List[Dict[str, Any]]:
             manual_parts.append(f"{manual_dump_count} dump")
         if manual_inspect_count:
             manual_parts.append(f"{manual_inspect_count} inspect")
+        if manual_jvmti_count:
+            manual_parts.append(f"{manual_jvmti_count} JVMTI")
+        if manual_whitebox_count:
+            manual_parts.append(f"{manual_whitebox_count} WhiteBox")
         if system_gc_count:
             manual_parts.append(f"{system_gc_count} System.gc()")
         manual_text = " + ".join(manual_parts)
@@ -658,6 +711,237 @@ def _rule_g1_mixed_ineffective(events, collector, stats) -> List[Dict[str, Any]]
 # =============================================================================
 
 
+def _classify_full_gc_manual_triggers(full_events):
+    """Classify Full GC events into manual triggers vs. real heap pressure.
+
+    Returns (manual_dump, manual_inspect, manual_jvmti, manual_whitebox,
+             system_gc, metadata_gc, last_ditch_count, has_promotion_failed,
+             extra_signals) where extra_signals is a list of detected
+             severity escalators (e.g., "promotion failed",
+             "concurrent mode failure").
+
+    Manual triggers are not heap pressure — the user did this on purpose
+    (jmap / jcmd / JVMTI / WhiteBox / application code calling System.gc()),
+    so the rule's severity should be capped or the event should be broken
+    out of the "real pressure" total.
+    """
+    manual_dump = 0
+    manual_inspect = 0
+    manual_jvmti = 0
+    manual_whitebox = 0
+    system_gc = 0
+    metadata_gc = 0
+    last_ditch = 0
+    has_promo_fail = False
+    extra_signals = []
+    for e in full_events:
+        rb = ((e.raw_body or "") + " " + (e.cause or "")).lower()
+        if "heap dump initiated gc" in rb:
+            manual_dump += 1
+        elif "heap inspection" in rb:
+            manual_inspect += 1
+        elif "jvmti forcegc" in rb:
+            manual_jvmti += 1
+        elif "whitebox initiated gc" in rb or "whitebox api gc" in rb:
+            manual_whitebox += 1
+        elif "system.gc()" in rb:
+            system_gc += 1
+        elif "metadata gc threshold" in rb:
+            metadata_gc += 1
+        elif "last ditch collection" in rb:
+            last_ditch += 1
+        if "promotion failed" in rb or "promotion failure" in rb:
+            has_promo_fail = True
+        if "concurrent mode failure" in rb:
+            extra_signals.append("concurrent mode failure")
+            break
+    return (manual_dump, manual_inspect, manual_jvmti, manual_whitebox,
+            system_gc, metadata_gc, last_ditch, has_promo_fail, extra_signals)
+
+
+def _render_full_gc_manual_only_detail(n_full, manual_dump, manual_inspect,
+                                        manual_jvmti, manual_whitebox,
+                                        system_gc, collector):
+    """Build detail_zh / detail_en for the all-manual-Full-GC case."""
+    causes = []
+    if manual_dump:
+        causes.append("heap dump (jmap -dump / jcmd GC.heap_dump)")
+    if manual_inspect:
+        causes.append("heap inspection (jcmd inspection)")
+    if manual_jvmti:
+        causes.append("JVMTI ForceGc (debugger attach)")
+    if manual_whitebox:
+        causes.append("WhiteBox Initiated GC (test framework)")
+    if system_gc:
+        causes.append("System.gc() (application code call)")
+    cause_text = " + ".join(causes)
+    name = "G1" if collector == "G1" else "CMS"
+    detail_zh = (f"{name} 出现 {n_full} 次 Full GC，均由手动操作触发"
+                 f"（{cause_text}），属预期操作而非堆压力")
+    detail_en = (f"{name} had {n_full} Full GC(s), all triggered by manual "
+                 f"{cause_text} — intentional, not heap pressure")
+    return detail_zh, detail_en
+
+
+def _render_full_gc_mixed_detail(n_full, manual_total, manual_dump,
+                                   manual_inspect, manual_jvmti,
+                                   manual_whitebox, system_gc, non_manual,
+                                   has_promo_fail):
+    """Build detail text for the manual + real-pressure mix case."""
+    manual_parts = []
+    if manual_dump:
+        manual_parts.append(f"{manual_dump} dump")
+    if manual_inspect:
+        manual_parts.append(f"{manual_inspect} inspect")
+    if manual_jvmti:
+        manual_parts.append(f"{manual_jvmti} JVMTI")
+    if manual_whitebox:
+        manual_parts.append(f"{manual_whitebox} WhiteBox")
+    if system_gc:
+        manual_parts.append(f"{system_gc} System.gc()")
+    manual_text = " + ".join(manual_parts)
+    pressure_label = "promotion failed" if has_promo_fail else "real heap pressure"
+    detail_zh = (f"出现 {n_full} 次 Full GC：{manual_total} 次手动"
+                 f"（{manual_text}），{non_manual} 次真实堆压力 ({pressure_label})。"
+                 f"手动部分非堆压力, 真实压力部分需关注")
+    detail_en = (f"Had {n_full} Full GC(s): {manual_total} manual "
+                 f"({manual_text}) and {non_manual} from {pressure_label}. "
+                 f"Manual triggers are not heap pressure; the {non_manual} "
+                 f"real-pressure events need attention")
+    return detail_zh, detail_en
+
+
+def _rule_cms_full_gc(events, collector, stats) -> List[Dict[str, Any]]:
+    """CMS Full GC rule — parallel to g1_full_gc.
+
+    Detects Full GC events for CMS, classifies them into manual triggers
+    (heap dump / inspection / System.gc) and real heap pressure (Allocation
+    Failure, promotion failures, etc.), and produces a tailored finding that
+    explains the breakdown. Without this rule, CMS Full GCs fall through to
+    the generic by_category["Full"] data without surfacing as a finding.
+
+    Severity:
+    - All manual → capped at medium (not heap pressure)
+    - Mixed or all real → high if count ≥ 3 (rule threshold)
+    """
+    if collector != "CMS":
+        return []
+    full_events = [e for e in events if e.category == "Full"]
+    if not full_events:
+        return []
+
+    n_full = len(full_events)
+    (manual_dump, manual_inspect, manual_jvmti, manual_whitebox,
+     system_gc, metadata_gc, last_ditch,
+     has_promo_fail, extra_signals) = _classify_full_gc_manual_triggers(full_events)
+    manual_total = (
+        manual_dump + manual_inspect + manual_jvmti
+        + manual_whitebox + system_gc
+    )
+    non_manual = n_full - manual_total
+    high_threshold = RULE_DEFINITIONS["g1_full_gc"]["thresholds"]["n_count_high"]
+
+    if manual_total > 0 and manual_total == n_full:
+        # All-manual case — same handling as G1
+        detail_zh, detail_en = _render_full_gc_manual_only_detail(
+            n_full, manual_dump, manual_inspect, manual_jvmti,
+            manual_whitebox, system_gc, "CMS")
+        title_zh = "CMS Full GC 由手动操作触发"
+        title_en = "CMS Full GC triggered by manual operation"
+        severity = "medium"
+    elif manual_total > 0 and non_manual > 0:
+        # Mixed case — manual + real pressure
+        detail_zh, detail_en = _render_full_gc_mixed_detail(
+            n_full, manual_total, manual_dump, manual_inspect,
+            manual_jvmti, manual_whitebox, system_gc,
+            non_manual, has_promo_fail)
+        title_zh = "CMS Full GC 混合触发"
+        title_en = "CMS Full GC: mixed manual + heap pressure"
+        severity = "high" if n_full >= high_threshold else "medium"
+    elif has_promo_fail or extra_signals:
+        # Real pressure case with severity escalator
+        sig = extra_signals[0] if extra_signals else "promotion failure"
+        detail_zh = (f"CMS 出现 {n_full} 次 Full GC，检测到 {sig}，"
+                     f"通常为老年代满或晋升失败")
+        detail_en = (f"CMS had {n_full} Full GC(s), detected {sig}; "
+                     f"usually indicates old generation full or promotion failure")
+        title_zh = f"CMS 发生 Full GC（含 {sig}）"
+        title_en = f"CMS experienced Full GC (incl. {sig})"
+        severity = "high" if n_full >= high_threshold else "medium"
+    else:
+        detail_zh = (f"CMS 出现 {n_full} 次 Full GC，这通常是堆配置不足或"
+                     f"老年代满的信号")
+        detail_en = (f"CMS had {n_full} Full GC(s), which usually indicates "
+                     f"insufficient heap or old generation exhaustion")
+        title_zh = "CMS 发生 Full GC"
+        title_en = "CMS experienced Full GC"
+        severity = "high" if n_full >= high_threshold else "medium"
+
+    return [_make_finding("cms_full_gc", severity, title_zh, title_en,
+                           detail_zh, detail_en)]
+
+
+def _rule_alloc_failure_full(events, collector, stats) -> List[Dict[str, Any]]:
+    """Universal: Full GC triggered by Allocation Failure + post-GC heap stays high.
+
+    Allocation Failure is a JVM-wide hard OOM signal — application requested
+    memory but the JVM could not satisfy (post-GC heap still > 85%). When this
+    fires, the heap is essentially un-reclaimable and OOM is imminent.
+
+    User fix: previously `alloc_failure_full` was referenced in _OOM_RULES and
+    _EVIDENCE_RULES but no rule actually fired it, leaving oom_candidates
+    populated but oom_risk=none and root_cause=performance — a banner/diagnosis
+    mismatch. This rule closes that gap by detecting Allocation Failure Full GC
+    events and surfacing them through the findings → oom_risk → root_cause chain.
+
+    Applies to all collectors (Parallel, G1, CMS, Serial, ZGC, Shenandoah).
+    Earlier `_detect_oom_candidates` already detected this for the banner;
+    now the same signal flows through `findings` too.
+    """
+    findings = []
+    fired_event = None
+    for e in events:
+        if e.category != "Full":
+            continue
+        # Match against cause text + raw_body (covers both unified-logging and
+        # JDK8 format, e.g., "Pause Full (Allocation Failure)")
+        cause_l = (e.cause or "").lower()
+        rb_l = (e.raw_body or "").lower()
+        if "allocation failure" not in cause_l and "allocation failure" not in rb_l:
+            continue
+        # Require a meaningful post-GC reading to confirm un-reclaimable heap
+        if e.heap_total_mb <= 0 or e.heap_after_mb <= 0:
+            continue
+        post_pct = e.heap_after_mb / e.heap_total_mb
+        # Threshold matches _OOM_CANDIDATE_HIGH_POST_GC_PCT (85%) — both rule
+        # and candidate detector use the same boundary for consistency.
+        if post_pct < 0.85:
+            continue
+        fired_event = e
+        break
+    if fired_event is None:
+        return []
+    post_pct = fired_event.heap_after_mb / fired_event.heap_total_mb
+    e = fired_event
+    findings.append(_make_finding(
+        "alloc_failure_full", "high",
+        "Allocation Failure 触发 Full GC, 堆无法回收",
+        "Allocation Failure Full GC, heap un-reclaimable",
+        f"Full GC 由 Allocation Failure 触发，回收后堆占用仍达 {post_pct*100:.0f}%, 堆已无法回收, OOM imminent",
+        f"Full GC triggered by Allocation Failure, post-GC heap at {post_pct*100:.0f}%, heap un-reclaimable, OOM imminent",
+    ))
+    # Attach triggering event so frontend can show which GC was the canary.
+    findings[-1]["event"] = {
+        "id": e.id,
+        "uptime_sec": e.uptime_sec,
+        "absolute_epoch_ms": e.absolute_epoch_ms,
+        "category": e.category,
+        "cause": e.cause or "",
+        "duration_ms": e.duration_ms,
+    }
+    return findings
+
+
 def _rule_cms_concurrent_mode_failure(events, collector, stats) -> List[Dict[str, Any]]:
     if collector != "CMS":
         return []
@@ -733,7 +1017,16 @@ def _rule_cms_fragmentation(events, collector, stats) -> List[Dict[str, Any]]:
     """
     if collector != "CMS":
         return []
-    full_events = [e for e in events if e.category == "Full" and e.heap_total_mb > 0]
+    # Exclude manual Full GC (jmap -dump / jcmd inspection / System.gc()) — after
+    # manual GC the heap is necessarily empty, so low post-GC is expected and
+    # doesn't indicate fragmentation. Without this filter, manual-only logs
+    # would falsely fire cms_fragmentation.
+    full_events = [
+        e for e in events
+        if e.category == "Full"
+        and e.heap_total_mb > 0
+        and not _is_manual_full_gc(e)
+    ]
     if len(full_events) < 3:
         return []
     post_pcts = [(e.heap_after_mb / e.heap_total_mb) for e in full_events]
@@ -879,9 +1172,11 @@ RULES: List[Tuple[Optional[str], Callable]] = [
     (None, _rule_stw_time_ratio_high),
     (None, _rule_gc_frequency_high),
     (None, _rule_reclaim_low),
+    (None, _rule_alloc_failure_full),
     (None, _rule_explicit_gc_called),
     (None, _rule_single_pause_long),
     # CMS-specific
+    ("CMS", _rule_cms_full_gc),
     ("CMS", _rule_cms_concurrent_mode_failure),
     ("CMS", _rule_cms_promotion_failed),
     ("CMS", _rule_cms_remark_too_long),

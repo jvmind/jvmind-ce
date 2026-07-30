@@ -1675,8 +1675,12 @@ def test_cms_remark_too_long_silent_when_p95_low():
 
 
 def test_cms_fragmentation_post_gc_low_with_full_gc():
-    """CMS 碎片化: Full GC + post-GC < 70% → leak category (堆不挤但 Full GC 仍触发)。"""
-    events = [_make_full_gc("System.gc()", 40.0, id_=i) for i in range(1, 4)]
+    """CMS 碎片化: Full GC + post-GC < 70% → leak category (堆不挤但 Full GC 仍触发)。
+
+    Note: 修复 cms_fragmentation 排除 manual 触发的 bug 后，cause 必须是非 manual
+    (这里用 "Allocation Failure")，否则 manual 后堆空是正常的，不算碎片化。
+    """
+    events = [_make_full_gc("Allocation Failure", 40.0, id_=i) for i in range(1, 4)]
     # post-GC 40% = heap has space, but Full GC happened (fragmentation signature)
     result = _diagnose_memory(events, "CMS", _base_stats(
         by_category={"Full": {"count": 3, "total_pause_ms": 600.0,
@@ -2649,6 +2653,375 @@ def test_zgc_allocation_stall_finding_includes_event_info():
         f"event.id should be 56, got {stall['event'].get('id')}"
     assert stall["event"]["uptime_sec"] == 55.35, \
         f"event.uptime_sec should be 55.35, got {stall['event'].get('uptime_sec')}"
+
+
+def test_cms_garbage_collection_heap_inspection_classified_as_full():
+    """回归: 'Garbage Collection (Heap Inspection Initiated GC)' (CMS JDK9+) → cat=Full。
+
+    Bug 修复前: _classify 只识别 "Garbage Collection (System.gc())" 为 Full,
+    其他 Garbage Collection (X) 形式均被归为 cat=Other。结果 _rule_gc_frequency_high
+    等以 category=='Full' 过滤的规则看不到这些事件，manual trigger 排除失效。
+    User 报告: cms 没有识别 Heap Inspection Initiated GC 类型的 Full GC。
+    """
+    from react_agent.gc_analyzer.jdk9.base_parser import _classify
+    cat, cause, is_conc = _classify("Garbage Collection (Heap Inspection Initiated GC)")
+    assert cat == "Full", \
+        f"Garbage Collection (Heap Inspection Initiated GC) should be Full, got {cat}"
+    assert cause == "Heap Inspection Initiated GC"
+
+
+def test_cms_garbage_collection_heap_dump_classified_as_full():
+    """回归: 'Garbage Collection (Heap Dump Initiated GC)' → cat=Full。
+
+    同上 Bug。jmap -dump / jcmd GC.heap_dump 触发也属于 Full GC 但被误归为 Other。
+    """
+    from react_agent.gc_analyzer.jdk9.base_parser import _classify
+    cat, cause, is_conc = _classify("Garbage Collection (Heap Dump Initiated GC)")
+    assert cat == "Full", \
+        f"Garbage Collection (Heap Dump Initiated GC) should be Full, got {cat}"
+
+
+def test_cms_garbage_collection_allocation_stall_classified_as_full():
+    """回归: 'Garbage Collection (Allocation Stall)' (ZGC JDK21) → cat=Full。
+
+    顺带修复 ZGC 的 parse gap（与 zgc_allocation_stall 规则不冲突，那个规则
+    直接文本匹配 raw_body，不依赖 category）。
+    """
+    from react_agent.gc_analyzer.jdk9.base_parser import _classify
+    cat, cause, is_conc = _classify("Garbage Collection (Allocation Stall)")
+    assert cat == "Full", \
+        f"Garbage Collection (Allocation Stall) should be Full, got {cat}"
+
+
+def test_cms_full_gc_fires_for_heap_inspection_in_jdk9_log():
+    """端到端: CMS JDK9 日志有 'Garbage Collection (Heap Inspection Initiated GC)' →
+    cms_full_gc 规则触发，severity=medium（manual trigger）而不是 high。
+
+    模拟 user 实际场景: 3 个 Heap Inspection 触发的 Full GC，无其他 Full GC。
+    """
+    log = """[0.005s][info][gc] Using CMS
+[0.010s][info][gc,init] Max Capacity: 1024M
+[1.000s][info][gc,start    ] GC(0) Garbage Collection (Heap Inspection Initiated GC)
+[1.000s][info][gc,heap     ] GC(0) Eden regions: 50->0(443)
+[1.000s][info][gc          ] GC(0) Garbage Collection (Heap Inspection Initiated GC) 52M->3M(1024M) 14.369ms
+[2.000s][info][gc,start    ] GC(1) Garbage Collection (Heap Inspection Initiated GC)
+[2.000s][info][gc          ] GC(1) Garbage Collection (Heap Inspection Initiated GC) 53M->4M(1024M) 15.123ms
+[3.000s][info][gc,start    ] GC(2) Garbage Collection (Heap Inspection Initiated GC)
+[3.000s][info][gc          ] GC(2) Garbage Collection (Heap Inspection Initiated GC) 54M->5M(1024M) 16.456ms
+"""
+    result = analyze(log)
+    rules = [f["rule"] for f in result["diagnosis"]["evidence"] + result["diagnosis"]["symptoms"]]
+    # cms_full_gc rule must fire
+    assert "cms_full_gc" in rules, \
+        f"cms_full_gc should fire on 3 manual Full GCs, got: {rules}"
+    cms_finding = next(f for f in result["diagnosis"]["evidence"] + result["diagnosis"]["symptoms"] if f["rule"] == "cms_full_gc")
+    # All manual → severity capped at medium (not high, despite count=3)
+    assert cms_finding["severity"] == "medium", \
+        f"All-manual Full GCs should be medium, got: {cms_finding['severity']}"
+    # Detail text should mention heap inspection specifically
+    assert "inspection" in cms_finding["detail_en"].lower(), \
+        f"Detail should mention inspection, got: {cms_finding['detail_en']}"
+    # Print finding for visibility
+    print(f"\nFinding detail_en: {cms_finding['detail_en']}")
+
+
+def test_cms_full_gc_with_real_pressure_fires_high():
+    """CMS Full GC 混合场景: manual + 真实堆压力（如 Allocation Failure）→ high。
+
+    模拟 CMS 老年代碎片化或并发回收失败 fallback 的真实场景。
+    """
+    log = """[0.005s][info][gc] Using CMS
+[0.010s][info][gc,init] Max Capacity: 1024M
+# 2 manual: Heap Inspection × 2
+[1.000s][info][gc,start    ] GC(0) Garbage Collection (Heap Inspection Initiated GC)
+[1.000s][info][gc          ] GC(0) Garbage Collection (Heap Inspection Initiated GC) 52M->3M(1024M) 14.369ms
+[2.000s][info][gc,start    ] GC(1) Garbage Collection (Heap Inspection Initiated GC)
+[2.000s][info][gc          ] GC(1) Garbage Collection (Heap Inspection Initiated GC) 53M->4M(1024M) 15.123ms
+# 3 real pressure: Allocation Failure × 3
+[3.000s][info][gc,start    ] GC(2) Garbage Collection (Allocation Failure)
+[3.000s][info][gc          ] GC(2) Garbage Collection (Allocation Failure) 90M->50M(1024M) 200.123ms
+[4.000s][info][gc,start    ] GC(3) Garbage Collection (Allocation Failure)
+[4.000s][info][gc          ] GC(3) Garbage Collection (Allocation Failure) 95M->52M(1024M) 210.456ms
+[5.000s][info][gc,start    ] GC(4) Garbage Collection (Allocation Failure)
+[5.000s][info][gc          ] GC(4) Garbage Collection (Allocation Failure) 100M->55M(1024M) 220.789ms
+"""
+    result = analyze(log)
+    rules = [f["rule"] for f in result["diagnosis"]["evidence"] + result["diagnosis"]["symptoms"]]
+    assert "cms_full_gc" in rules, f"cms_full_gc should fire on mixed, got: {rules}"
+    cms_finding = next(f for f in result["diagnosis"]["evidence"] + result["diagnosis"]["symptoms"] if f["rule"] == "cms_full_gc")
+    # Mixed → high severity (real pressure events present)
+    assert cms_finding["severity"] == "high", \
+        f"Mixed Full GCs should be high, got: {cms_finding['severity']}"
+    assert "manual" in cms_finding["detail_en"].lower() and \
+           "pressure" in cms_finding["detail_en"].lower(), \
+        f"Detail should break down manual vs pressure, got: {cms_finding['detail_en']}"
+
+
+def test_cms_fragmentation_excludes_manual_full_gc():
+    """回归: cms_fragmentation 必须排除手动触发的 Full GC（jmap/jcmd/System.gc）。
+
+    Bug 修复前: 当 3 次 Heap Inspection 触发 Full GC 后堆占用 0.3%（正常的空堆），
+    cms_fragmentation 误判为碎片化（因为 post-GC < 70%）。手动 Full GC 之后堆
+    必然空，无法用 post-GC 占用判断碎片化。
+    """
+    log = """[0.005s][info][gc] Using CMS
+[0.010s][info][gc,init] Max Capacity: 1024M
+[1.000s][info][gc,start    ] GC(0) Garbage Collection (Heap Inspection Initiated GC)
+[1.000s][info][gc          ] GC(0) Garbage Collection (Heap Inspection Initiated GC) 52M->3M(1024M) 14.0ms
+[2.000s][info][gc,start    ] GC(1) Garbage Collection (Heap Inspection Initiated GC)
+[2.000s][info][gc          ] GC(1) Garbage Collection (Heap Inspection Initiated GC) 53M->4M(1024M) 15.0ms
+[3.000s][info][gc,start    ] GC(2) Garbage Collection (Heap Inspection Initiated GC)
+[3.000s][info][gc          ] GC(2) Garbage Collection (Heap Inspection Initiated GC) 54M->5M(1024M) 16.0ms
+"""
+    result = analyze(log)
+    rules = [f["rule"] for f in result["diagnosis"]["evidence"] + result["diagnosis"]["symptoms"]]
+    # cms_full_gc 应该触发（manual 整体识别）
+    assert "cms_full_gc" in rules, f"cms_full_gc should fire, got: {rules}"
+    # cms_fragmentation 不应触发（manual Full GC 之后堆空是正常的，不是碎片化）
+    assert "cms_fragmentation" not in rules, \
+        f"cms_fragmentation should NOT fire on manual-only Full GCs (post-GC < 70% 是 manual 后果，非碎片化), got: {rules}"
+
+
+def test_cms_fragmentation_still_fires_on_real_pressure():
+    """回归: 真实堆压力场景下 cms_fragmentation 仍然正确触发。
+
+    3 次 Allocation Failure Full GC，每次 post-GC 仍 < 70% → 真实碎片化。
+    （不是手动触发，而是堆真的满了但 GC 后堆是空的、说明 fragmentation）
+    """
+    log = """[0.005s][info][gc] Using CMS
+[0.010s][info][gc,init] Max Capacity: 1024M
+[1.000s][info][gc,start    ] GC(0) Garbage Collection (Allocation Failure)
+[1.000s][info][gc          ] GC(0) Garbage Collection (Allocation Failure) 200M->190M(1024M) 200.0ms
+[2.000s][info][gc,start    ] GC(1) Garbage Collection (Allocation Failure)
+[2.000s][info][gc          ] GC(1) Garbage Collection (Allocation Failure) 210M->195M(1024M) 200.0ms
+[3.000s][info][gc,start    ] GC(2) Garbage Collection (Allocation Failure)
+[3.000s][info][gc          ] GC(2) Garbage Collection (Allocation Failure) 220M->200M(1024M) 200.0ms
+"""
+    result = analyze(log)
+    rules = [f["rule"] for f in result["diagnosis"]["evidence"] + result["diagnosis"]["symptoms"]]
+    assert "cms_fragmentation" in rules, \
+        f"cms_fragmentation should fire on real Allocation Failure Full GCs with low post-GC, got: {rules}"
+
+
+def test_cms_fragmentation_mixed_excludes_only_manual():
+    """回归: 混合场景: manual + real Allocation Failure → cms_fragmentation 仅基于 real events 判定。
+
+    例如 2 manual + 3 Allocation Failure，但只有 3 个 real 时 仍然 fragmented；
+    cms_fragmentation 应只考虑 real events。
+    """
+    log = """[0.005s][info][gc] Using CMS
+[0.010s][info][gc,init] Max Capacity: 1024M
+# 2 manual: Heap Inspection
+[1.000s][info][gc,start    ] GC(0) Garbage Collection (Heap Inspection Initiated GC)
+[1.000s][info][gc          ] GC(0) Garbage Collection (Heap Inspection Initiated GC) 52M->3M(1024M) 14.0ms
+[2.000s][info][gc,start    ] GC(1) Garbage Collection (Heap Inspection Initiated GC)
+[2.000s][info][gc          ] GC(1) Garbage Collection (Heap Inspection Initiated GC) 53M->4M(1024M) 15.0ms
+# 1 real: Allocation Failure
+[3.000s][info][gc,start    ] GC(2) Garbage Collection (Allocation Failure)
+[3.000s][info][gc          ] GC(2) Garbage Collection (Allocation Failure) 200M->190M(1024M) 200.0ms
+"""
+    result = analyze(log)
+    rules = [f["rule"] for f in result["diagnosis"]["evidence"] + result["diagnosis"]["symptoms"]]
+    # 只有一个 real event，不满足 min_events=3，应该不触发 fragmentation
+    assert "cms_fragmentation" not in rules, \
+        f"Only 1 real Full GC < min_events=3, fragmentation should NOT fire, got: {rules}"
+
+
+def test_reclaim_low_excludes_manual_full_gc():
+    """回归: _rule_reclaim_low 必须排除 manual Full GC。
+
+    Bug 修复前: 3 个 System.gc() 触发 Full GC，每次 reclaim 都很低（堆本来无压力，
+    manual GC 后堆自然空），reclaim_low 会误报 high (OOM 信号)。这是 false positive。
+    真实 OOM 应该是用户没手动触发时 reclaim_low 仍然很低。
+    """
+    # 3 System.gc() Full GCs — low reclaim is EXPECTED (manual, heap not pressured)
+    events = [_make_full_gc("System.gc()", 1.0, id_=i) for i in range(1, 4)]
+    result = _diagnose_memory(events, "G1", _base_stats(
+        by_category={"Full": {"count": 3, "total_pause_ms": 300.0,
+                              "avg_pause_ms": 100.0, "max_pause_ms": 100.0,
+                              "p95_pause_ms": 100.0, "p99_pause_ms": 100.0,
+                              "avg_freed_mb": 10.0, "total_freed_mb": 30.0}},
+    ))
+    rules = [f["rule"] for f in result["evidence"] + result["symptoms"]]
+    # reclaim_low must NOT fire on manual-only Full GCs
+    assert "reclaim_low" not in rules, \
+        f"All-manual System.gc() should NOT fire reclaim_low (heap is not pressured), got: {rules}"
+
+
+def test_reclaim_low_still_fires_on_real_low_reclaim():
+    """回归: 真实 OOM 场景：Allocation Failure × 3 + post-GC 99% (reclaim < 5%) → reclaim_low high。
+
+    """
+    # Allocation Failure Full GC events with post-GC 99% (low reclaim → real OOM signal)
+    events = [_make_full_gc("Allocation Failure", 99.0, id_=i) for i in range(1, 4)]
+    result = _diagnose_memory(events, "G1", _base_stats(
+        by_category={"Full": {"count": 3, "total_pause_ms": 600.0,
+                              "avg_pause_ms": 200.0, "max_pause_ms": 200.0,
+                              "p95_pause_ms": 200.0, "p99_pause_ms": 200.0,
+                              "avg_freed_mb": 40.0, "total_freed_mb": 120.0}},
+    ))
+    rules = [f["rule"] for f in result["evidence"] + result["symptoms"]]
+    # reclaim_low SHOULD fire on Allocation Failure with low reclaim (real OOM signal)
+    assert "reclaim_low" in rules, \
+        f"Allocation Failure Full GCs with low reclaim SHOULD trigger reclaim_low, got: {rules}"
+
+
+def test_reclaim_low_mixed_only_uses_real_events():
+    """回归: 混合 (manual + real) 场景：reclaim_low 只基于 real events 判定。
+
+    2 manual + 1 real Allocation Failure：1 个 real event 不满足 min_events=3 → 不触发。
+    """
+    # 2 manual System.gc() + 1 Allocation Failure (real, post-GC 99% → low reclaim)
+    events = (
+        [_make_full_gc("System.gc()", 99.0, id_=i) for i in range(1, 3)]
+        + [_make_full_gc("Allocation Failure", 99.0, id_=3)]
+    )
+    result = _diagnose_memory(events, "G1", _base_stats(
+        by_category={"Full": {"count": 3, "total_pause_ms": 600.0,
+                              "avg_pause_ms": 200.0, "max_pause_ms": 200.0,
+                              "p95_pause_ms": 200.0, "p99_pause_ms": 200.0,
+                              "avg_freed_mb": 40.0, "total_freed_mb": 120.0}},
+    ))
+    rules = [f["rule"] for f in result["evidence"] + result["symptoms"]]
+    # Only 1 real event < min_events=3 → reclaim_low should NOT fire
+    assert "reclaim_low" not in rules, \
+        f"Only 1 real Full GC < min_events=3, reclaim_low should NOT fire, got: {rules}"
+
+
+def test_alloc_failure_full_fires_on_allocation_failure_with_high_post_gc():
+    """回归: Allocation Failure Full GC + post-GC >= 85% → alloc_failure_full fires high。
+
+    User report: Parallel 已经检测到 oom_candidates (首个 OOM 风险点)，但
+    oom_risk=none、root_cause=performance。Bottleneck: alloc_failure_full 在 _OOM_RULES
+    里被引用但从未有规则实际触发它。
+
+    修复: 实现 _rule_alloc_failure_full universal rule，让 allocation failure + high
+    post-GC 这个 hard OOM 信号能进入 findings/oom_risk/root_cause 全链路。
+    """
+    events = [
+        # Allocation Failure Full GC, post-GC 90% (>= 85% threshold)
+        _make_full_gc("Allocation Failure", 90.0, id_=1),
+        _make_full_gc("Allocation Failure", 90.0, id_=2),
+        _make_full_gc("Allocation Failure", 90.0, id_=3),
+    ]
+    result = _diagnose_memory(events, "Parallel", _base_stats(
+        by_category={"Full": {"count": 3, "total_pause_ms": 600.0,
+                               "avg_pause_ms": 200.0, "max_pause_ms": 200.0,
+                               "p95_pause_ms": 200.0, "p99_pause_ms": 200.0,
+                               "avg_freed_mb": 410.0, "total_freed_mb": 1230.0}},
+    ))
+    rules = [f["rule"] for f in result["evidence"] + result["symptoms"]]
+    # alloc_failure_full must fire
+    assert "alloc_failure_full" in rules, \
+        f"alloc_failure_full should fire on 3 Allocation Failure Full GCs with high post-GC, got: {rules}"
+    # oom_risk must now be high (since alloc_failure_full is in _OOM_RULES)
+    assert result["oom_risk"] == "high", \
+        f"oom_risk should be high after alloc_failure_full fires, got: {result['oom_risk']}"
+    # root_cause must be oom (consistent with banner)
+    assert result["root_cause"]["category"] == "oom", \
+        f"root_cause should be oom (banner-memory-diagnosis consistency), got: {result['root_cause']['category']}"
+
+
+def test_alloc_failure_full_does_not_fire_when_post_gc_low():
+    """回归: Allocation Failure + post-GC < 85% 不应触发 alloc_failure_full。
+
+    reclaim 健康时 heap 不在 OOM territory，不该升级到 oom。
+    """
+    # post-GC 50% (reclaim healthy, heap has space)
+    events = [_make_full_gc("Allocation Failure", 50.0, id_=i) for i in range(1, 4)]
+    result = _diagnose_memory(events, "Parallel", _base_stats(
+        by_category={"Full": {"count": 3, "total_pause_ms": 600.0,
+                               "avg_pause_ms": 200.0, "max_pause_ms": 200.0,
+                               "p95_pause_ms": 200.0, "p99_pause_ms": 200.0,
+                               "avg_freed_mb": 2000.0, "total_freed_mb": 6000.0}},
+    ))
+    rules = [f["rule"] for f in result["evidence"] + result["symptoms"]]
+    # oom_candidates detection only fires at >= 85%, alloc_failure_full should match
+    assert "alloc_failure_full" not in rules, \
+        f"alloc_failure_full should NOT fire on low post-GC, got: {rules}"
+
+
+def test_alloc_failure_full_universal_across_collectors():
+    """回归: alloc_failure_full universal — Parallel / G1 / CMS / Serial 都该触发。
+
+    Allocation Failure 不是 collector-specific 信号，是 JVM 通用 OOM 信号。
+    """
+    for collector in ("Parallel", "G1", "CMS", "Serial"):
+        events = [_make_full_gc("Allocation Failure", 90.0, id_=i) for i in range(1, 2)]
+        # 1 个 event 不一定够 min_events，但 oom_candidates 仍可触发
+        result = _diagnose_memory(events, collector, _base_stats(
+            by_category={"Full": {"count": 1, "total_pause_ms": 200.0,
+                                   "avg_pause_ms": 200.0, "max_pause_ms": 200.0,
+                                   "p95_pause_ms": 200.0, "p99_pause_ms": 200.0,
+                                   "avg_freed_mb": 410.0, "total_freed_mb": 410.0}},
+        ))
+        rules = [f["rule"] for f in result["evidence"] + result["symptoms"]]
+        assert "alloc_failure_full" in rules, \
+            f"alloc_failure_full should fire on {collector} with Allocation Failure, got: {rules}"
+
+
+def test_is_manual_full_gc_covers_jvmti_forcegc():
+    """覆盖: 'Jvmti ForceGc' / 'JVMTI ForceGc' 视为 manual。
+
+    HotSpot ForceGarbageCollection JVMTI function 显式触发 (调试器 attach)。
+    这是 Common Lisp-style explicit GC — 用户主动操作的, 不是 heap pressure。
+    """
+    from react_agent.gc_analyzer.compute_stats import _is_manual_full_gc
+
+    for cause in ("Jvmti ForceGc", "JVMTI ForceGc", "Jvmti FORCEGC"):
+        ev = _make_full_gc(cause, 99.0, id_=1)
+        assert _is_manual_full_gc(ev), \
+            f"cause={cause!r} should be recognized as manual"
+
+
+def test_is_manual_full_gc_covers_whitebox():
+    """覆盖: 'WhiteBox Initiated GC' 视为 manual。
+
+    HotSpot WhiteBox API (测试框架使用) `WB.fullGC()` 显式触发。
+    """
+    from react_agent.gc_analyzer.compute_stats import _is_manual_full_gc
+
+    for cause in ("WhiteBox Initiated GC", "WhiteBox API GC"):
+        ev = _make_full_gc(cause, 99.0, id_=1)
+        assert _is_manual_full_gc(ev), \
+            f"cause={cause!r} should be recognized as manual"
+
+
+def test_g1_full_gc_manual_breakdown_includes_jvmti_and_whitebox():
+    """端到端: G1 Full GC 由 JVMTI / WhiteBox 触发 → g1_full_gc 把它算 manual。
+
+    验证 _rule_g1_full_gc 把新的 manual trigger 算进 manual_total 计数，
+    全部为 manual 时 severity cap 到 medium。
+    """
+    # JVMTI ForceGc × 3
+    events_jvmti = [_make_full_gc("Jvmti ForceGc", 99.0, id_=i) for i in range(1, 4)]
+    result = _diagnose_memory(events_jvmti, "G1", _base_stats(
+        by_category={"Full": {"count": 3, "total_pause_ms": 60.0,
+                               "avg_pause_ms": 20.0, "max_pause_ms": 20.0,
+                               "p95_pause_ms": 20.0, "p99_pause_ms": 20.0,
+                               "avg_freed_mb": 2000.0, "total_freed_mb": 6000.0}},
+    ))
+    findings = result["evidence"] + result["symptoms"]
+    g1 = next((f for f in findings if f["rule"] == "g1_full_gc"), None)
+    assert g1 is not None, f"g1_full_gc should fire, got: {[f['rule'] for f in findings]}"
+    assert g1["severity"] == "medium", \
+        f"All-JVMTI Full GCs should be medium (manual capped), got: {g1['severity']}"
+    assert "jvmti" in g1["detail_en"].lower(), \
+        f"Detail should mention jvmti, got: {g1['detail_en']}"
+
+    # WhiteBox × 3
+    events_wb = [_make_full_gc("WhiteBox Initiated GC", 99.0, id_=i) for i in range(1, 4)]
+    result = _diagnose_memory(events_wb, "G1", _base_stats(
+        by_category={"Full": {"count": 3, "total_pause_ms": 60.0,
+                               "avg_pause_ms": 20.0, "max_pause_ms": 20.0,
+                               "p95_pause_ms": 20.0, "p99_pause_ms": 20.0,
+                               "avg_freed_mb": 2000.0, "total_freed_mb": 6000.0}},
+    ))
+    findings = result["evidence"] + result["symptoms"]
+    g1 = next((f for f in findings if f["rule"] == "g1_full_gc"), None)
+    assert g1 is not None
+    assert g1["severity"] == "medium"
+    assert "whitebox" in g1["detail_en"].lower()
 
 
 if __name__ == "__main__":

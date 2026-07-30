@@ -115,15 +115,28 @@ def _classify(full_type: str) -> Tuple[str, str, bool]:
     is_concurrent = sl.startswith("concurrent")
     cat = "Other"
     # 优先级：Full > Mixed > Young > ZGC pause > Shenandoah > Remark > Cleanup > InitialMark > Concurrent
-    # ZGC full gc: Classify as Full GC when:
+    # Full GC detection:
     # 1. Explicitly has the word "full" (Full GC), OR
     # 2. "major collection" AND cause is "system.gc()" - JDK25+ ZGC uses this format for System.gc()
-    # 3. It's "Garbage Collection (System.gc())" - older ZGC explicit full GC triggered by System.gc()
+    # 3. "Garbage Collection (X)" where X is a known Full GC trigger (manual OR real):
+    #    - System.gc()                       (manual: application code call)
+    #    - Heap Inspection Initiated GC       (manual: jcmd inspection)
+    #    - Heap Dump Initiated GC            (manual: jmap -dump / jcmd GC.heap_dump)
+    #    - Allocation Stall                  (ZGC sync mode — old gen full under allocation)
+    #    - Allocation Failure                (real heap pressure — old gen full)
     # Use word boundary check to avoid false positives like "Warm**full**" matching "full"
     has_full = re.search(r'\bfull\b', raw_lower) is not None
     has_major_systemgc = re.search(r'\bmajor collection\b', raw_lower) is not None and cause.lower() == "system.gc()"
+    # Causes that signal a Full GC event (manual triggers OR real heap pressure)
+    _FULL_GC_CAUSES = {
+        "system.gc()",
+        "heap inspection initiated gc",
+        "heap dump initiated gc",
+        "allocation stall",
+        "allocation failure",  # CMS / ZGC JDK21 real heap-pressure trigger
+    }
     if has_full or has_major_systemgc or (
-        "garbage collection" in raw_lower and cause.lower() == "system.gc()"
+        "garbage collection" in raw_lower and cause.lower().strip() in _FULL_GC_CAUSES
     ):
         cat = "Full"
     elif "mixed" in raw_lower:  # G1: Pause Young (Mixed)

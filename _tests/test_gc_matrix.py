@@ -32,14 +32,14 @@ GC_FIXTURES = {
     "gc-jdk17-parallel.log": {"jdk": "9+", "collector": "Parallel", "required": {"Young"}, "allowed": {"Young", "Full"}},
     "gc-jdk17-serial.log": {"jdk": "9+", "collector": "Serial", "required": {"Young"}, "allowed": {"Young", "Full"}},
     "gc-jdk17-shenandoah.log": {"jdk": "9+", "collector": "Shenandoah", "required": {"Shenandoah"}, "allowed": {"Shenandoah", "Concurrent", "Other", "Full"}},
-    "gc-jdk17-zgc.log": {"jdk": "9+", "collector": "Z", "required": {"ZGC", "Concurrent"}, "allowed": {"ZGC", "Concurrent", "Other"}},
+    "gc-jdk17-zgc.log": {"jdk": "9+", "collector": "Z", "required": {"ZGC", "Concurrent"}, "allowed": {"ZGC", "Concurrent", "Other", "Full"}},
 
     "gc-jdk21-g1.log": {"jdk": "9+", "collector": "G1", "required": {"Young"}, "allowed": {"Young", "Mixed", "InitialMark", "Concurrent", "Remark", "Cleanup", "Full"}},
     "gc-jdk21-generational-zgc.log": {"jdk": "9+", "collector": "Z", "required": {"ZGC", "Concurrent"}, "allowed": {"ZGC", "Concurrent", "Other", "Young"}},
     "gc-jdk21-parallel.log": {"jdk": "9+", "collector": "Parallel", "required": {"Young"}, "allowed": {"Young", "Full"}},
     "gc-jdk21-serial.log": {"jdk": "9+", "collector": "Serial", "required": {"Young"}, "allowed": {"Young", "Full"}},
     "gc-jdk21-shenandoah.log": {"jdk": "9+", "collector": "Shenandoah", "required": {"Shenandoah"}, "allowed": {"Shenandoah", "Concurrent", "Other", "Full"}},
-    "gc-jdk21-zgc.log": {"jdk": "9+", "collector": "Z", "required": {"ZGC", "Concurrent"}, "allowed": {"ZGC", "Concurrent", "Other"}},
+    "gc-jdk21-zgc.log": {"jdk": "9+", "collector": "Z", "required": {"ZGC", "Concurrent"}, "allowed": {"ZGC", "Concurrent", "Other", "Full"}},
 
     "gc-jdk25-g1.log": {"jdk": "9+", "collector": "G1", "required": {"Young"}, "allowed": {"Young", "Mixed", "InitialMark", "Concurrent", "Remark", "Cleanup", "Full"}},
     "gc-jdk25-generational-zgc.log": {"jdk": "9+", "collector": "Z", "required": {"ZGC", "Concurrent"}, "allowed": {"ZGC", "Concurrent", "Other", "Young"}},
@@ -89,6 +89,25 @@ def _assert_fixture(name: str, cfg: dict) -> None:
     assert all(item["cat"] != "Concurrent" for item in stats["slowest"]), name
     assert all(point["count"] >= 0 for point in stats["frequency_series"]), name
     assert all(SERIES_KEYS <= set(point.keys()) for point in stats["series"]), name
+
+    # rule_definitions payload present in diagnosis (universal across collectors)
+    diag = stats.get("diagnosis") or {}
+    rd = diag.get("rule_definitions")
+    assert rd is not None, f"{name}: diagnosis.rule_definitions missing"
+    expected = {"throughput_low", "stw_time_ratio_high", "gc_frequency_high",
+                "reclaim_low", "single_pause_long", "g1_full_gc", "g1_mixed_ineffective"}
+    assert expected <= set(rd.keys()), f"{name}: missing rules {expected - set(rd.keys())}"
+
+    # root-cause + evidence/symptoms/recommendations structure (always present)
+    assert "root_cause" in diag, f"{name}: diagnosis.root_cause missing"
+    assert diag["root_cause"]["category"] in ("oom", "leak", "performance", "healthy"), \
+        f"{name}: invalid root_cause category: {diag['root_cause']}"
+    assert "evidence" in diag and isinstance(diag["evidence"], list), \
+        f"{name}: diagnosis.evidence missing or not a list"
+    assert "symptoms" in diag and isinstance(diag["symptoms"], list), \
+        f"{name}: diagnosis.symptoms missing or not a list"
+    assert "recommendations" in diag and isinstance(diag["recommendations"], list), \
+        f"{name}: diagnosis.recommendations missing or not a list"
 
     non_concurrent_pause = sum(
         data["total_pause_ms"]
