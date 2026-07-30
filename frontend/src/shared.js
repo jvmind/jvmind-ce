@@ -196,10 +196,11 @@ export function calculateGCHealth(stats) {
       if (hasHigh || d.oom_risk === "high") return "bad";
       return "warn";
     }
-    if (rc === "performance") {
-      // Performance issue — never reaches "bad" through findings alone.
-      // High-severity findings (gc_frequency_high, throughput_low high, etc.)
-      // signal "should investigate" but not "imminent crash", so cap at warn.
+if (rc === "performance") {
+      // Performance issue — capped at warn by default. Raw-stats extremes
+      // (heap ≥ 98%) override the category cap: imminent OOM is not a
+      // performance issue, regardless of how rules classified the finding.
+      if (veryHighHeap) return "bad";
       return "warn";
     }
     // rc === "healthy" — no root cause. Surface raw-stats extremes as a

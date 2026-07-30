@@ -66,7 +66,10 @@ RULE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         },
     },
     "g1_full_gc": {
-        "category": "oom",
+        # G1 Full GC fires high when ≥3 events; severity escalates to oom
+        # only when paired with reclaim_low (cross-rule logic in _rollup_risks).
+        # Default category is performance: alone = performance, alone + reclaim_low = oom.
+        "category": "performance",
         "applies_to": "G1",
         "thresholds": {"n_count_high": 3},
         "extra_signals": ["evacuation_failure", "to_space_exhausted"],
@@ -132,7 +135,10 @@ RULE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "thresholds": {"post_gc_pct_threshold": 0.7, "min_events": 3},
     },
     "zgc_allocation_stall": {
-        "category": "oom",  # ZGC 的硬 fallback (堆无法满足分配)
+        # ZGC's hard fallback (heap cannot satisfy allocation). Severity escalates
+        # to oom only when paired with reclaim_low (cross-rule logic in _rollup_risks).
+        # Default category is performance: alone = performance, + reclaim_low = oom.
+        "category": "performance",
         "applies_to": "Z",
         "thresholds": {"min_count": 1},
     },
@@ -142,7 +148,9 @@ RULE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "thresholds": {"p99_ms_medium": 1, "p99_ms_high": 5},
     },
     "zgc_concurrent_cycle_failure": {
-        "category": "oom",  # ZGC 同步模式 = OOM 区间
+        # ZGC sync mode = OOM severity, but standalone = performance. Cross-rule
+        # escalation in _rollup_risks bumps to oom when reclaim_low also fires.
+        "category": "performance",
         "applies_to": "Z",
         "thresholds": {"min_count": 1},
     },
@@ -482,8 +490,6 @@ def _rule_g1_full_gc(events, collector, stats) -> List[Dict[str, Any]]:
     manual_jvmti_count = 0
     manual_whitebox_count = 0
     system_gc_count = 0
-    metadata_gc_count = 0
-    last_ditch_count = 0
     for e in full_events:
         rb = (e.raw_body or "") + " " + (e.cause or "")
         rb_l = rb.lower()
@@ -501,10 +507,11 @@ def _rule_g1_full_gc(events, collector, stats) -> List[Dict[str, Any]]:
             manual_whitebox_count += 1
         elif "system.gc()" in rb_l or rb_l.strip() == "system.gc()":
             system_gc_count += 1
-        elif "metadata gc threshold" in rb_l:
-            metadata_gc_count += 1
-        elif "last ditch collection" in rb_l:
-            last_ditch_count += 1
+        # NOTE: "Metadata GC Threshold" and "Last Ditch Collection" are tracked
+        # automatically by the JVM (class metadata expansion / G1 last-resort).
+        # They are NOT manual triggers (the user did not call them) and NOT
+        # heap pressure signals per the OOM principle. Currently untracked;
+        # if future tuning needs them, re-introduce counters here.
         if "to-space exhausted" in rb_l or "to space exhausted" in rb_l:
             extra_signals.append("to-space exhausted")
             break
@@ -715,23 +722,25 @@ def _classify_full_gc_manual_triggers(full_events):
     """Classify Full GC events into manual triggers vs. real heap pressure.
 
     Returns (manual_dump, manual_inspect, manual_jvmti, manual_whitebox,
-             system_gc, metadata_gc, last_ditch_count, has_promotion_failed,
-             extra_signals) where extra_signals is a list of detected
-             severity escalators (e.g., "promotion failed",
-             "concurrent mode failure").
+             system_gc, has_promotion_failed, extra_signals) where
+             extra_signals is a list of detected severity escalators
+             (e.g., "promotion failed", "concurrent mode failure").
 
     Manual triggers are not heap pressure — the user did this on purpose
     (jmap / jcmd / JVMTI / WhiteBox / application code calling System.gc()),
     so the rule's severity should be capped or the event should be broken
     out of the "real pressure" total.
+
+    Note: "Metadata GC Threshold" and "Last Ditch Collection" are NOT counted
+    here — they're automatic JVM signals (class metadata expansion / G1 last-
+    resort before OOM), not manual triggers. If future tuning needs to surface
+    these in detail text, re-introduce counters here.
     """
     manual_dump = 0
     manual_inspect = 0
     manual_jvmti = 0
     manual_whitebox = 0
     system_gc = 0
-    metadata_gc = 0
-    last_ditch = 0
     has_promo_fail = False
     extra_signals = []
     for e in full_events:
@@ -746,17 +755,13 @@ def _classify_full_gc_manual_triggers(full_events):
             manual_whitebox += 1
         elif "system.gc()" in rb:
             system_gc += 1
-        elif "metadata gc threshold" in rb:
-            metadata_gc += 1
-        elif "last ditch collection" in rb:
-            last_ditch += 1
         if "promotion failed" in rb or "promotion failure" in rb:
             has_promo_fail = True
         if "concurrent mode failure" in rb:
             extra_signals.append("concurrent mode failure")
             break
     return (manual_dump, manual_inspect, manual_jvmti, manual_whitebox,
-            system_gc, metadata_gc, last_ditch, has_promo_fail, extra_signals)
+            system_gc, has_promo_fail, extra_signals)
 
 
 def _render_full_gc_manual_only_detail(n_full, manual_dump, manual_inspect,
@@ -832,8 +837,7 @@ def _rule_cms_full_gc(events, collector, stats) -> List[Dict[str, Any]]:
 
     n_full = len(full_events)
     (manual_dump, manual_inspect, manual_jvmti, manual_whitebox,
-     system_gc, metadata_gc, last_ditch,
-     has_promo_fail, extra_signals) = _classify_full_gc_manual_triggers(full_events)
+     system_gc, has_promo_fail, extra_signals) = _classify_full_gc_manual_triggers(full_events)
     manual_total = (
         manual_dump + manual_inspect + manual_jvmti
         + manual_whitebox + system_gc
@@ -1220,7 +1224,7 @@ _LEAK_RULES = {"heap_floor_rising", "reclaim_declining", "g1_mixed_ineffective",
 # - zgc_concurrent_cycle_failure similarly — performance signal unless paired with
 #   reclaim_low. Keeping these out of _OOM_RULES avoids false-positive OOM alerts
 #   when ZGC is operating normally under high allocation rate.
-_OOM_RULES = {"oom_critical", "alloc_failure_full", "reclaim_low"}
+_OOM_RULES = {"alloc_failure_full", "reclaim_low"}
 
 
 def _rollup_risks(findings: List[Dict[str, Any]]) -> Dict[str, str]:
@@ -1264,6 +1268,18 @@ def _rollup_risks(findings: List[Dict[str, Any]]) -> Dict[str, str]:
     if has_zgc_oom_signal and has_reclaim_any and oom_risk != "high":
         oom_risk = "high"
 
+    # CMS analog: cms_concurrent_mode_failure or cms_promotion_failed at high
+    # severity (Full GC fallback) + reclaim_low → oom. Without this, CMS
+    # logs with concurrent mode failure + low reclaim would NOT escalate to
+    # oom_risk, leaving root_cause=performance and an inconsistent banner.
+    has_cms_oom_signal = any(
+        f["rule"] in ("cms_concurrent_mode_failure", "cms_promotion_failed")
+        and f["severity"] == "high"
+        for f in findings
+    )
+    if has_cms_oom_signal and has_reclaim_any and oom_risk != "high":
+        oom_risk = "high"
+
     # Mutual exclusion: leak_risk and oom_risk describe sequential states
     # (OOM is the terminal state, leak is the warning). If both could be
     # reported, OOM wins and leak collapses to "none" — there's no point
@@ -1282,8 +1298,10 @@ def _rollup_risks(findings: List[Dict[str, Any]]) -> Dict[str, str]:
 # Findings that *directly* support each root cause category. A finding not in
 # the active category's set becomes a "symptom" (downstream effect of the root).
 # Per user principle "OOM = Full GC + cannot reclaim":
-# - oom: g1_full_gc and reclaim_low are NOT in oom individually (only together)
-#   g1_full_gc alone = performance (Full GC happened but heap may have recovered)
+# - oom: g1_full_gc is now IN oom (it IS the Full GC evidence per the principle).
+#   g1_full_gc fires high (≥3 events) and pairs with reclaim_low via cross-rule
+#   escalation — so when root_cause=oom, g1_full_gc appearing as evidence is
+#   semantically correct (G1 Full GC = the Full GC half of the OOM principle).
 # - reclaim_low alone = leak (heap can't reclaim, but no explicit Full GC)
 # - reclaim_low is now in BOTH leak and oom (mutual exclusion decides which)
 # - CMS rules → performance (CMS designed to allow Full GC fallback)
@@ -1292,14 +1310,14 @@ def _rollup_risks(findings: List[Dict[str, Any]]) -> Dict[str, str]:
 # - cms_fragmentation → leak (Full GC + heap has space = resource fragmentation)
 _EVIDENCE_RULES = {
     "oom": {
-        "reclaim_low", "alloc_failure_full",
+        "reclaim_low", "alloc_failure_full", "g1_full_gc",
     },
     "leak": {
         "g1_mixed_ineffective", "reclaim_low", "cms_fragmentation",
     },
     "performance": {
         "throughput_low", "gc_frequency_high", "stw_time_ratio_high", "single_pause_long",
-        "g1_full_gc", "cms_remark_too_long",
+        "cms_remark_too_long",
         "cms_concurrent_mode_failure", "cms_promotion_failed",
         # Heap pressure signals (NOT leak — could be transient bursts)
         "g1_compaction_pause", "evacuation_failure",
@@ -1420,14 +1438,15 @@ def _generate_recommendations(
 
     if category == "oom":
         if "reclaim_low" in fired_rules or "g1_full_gc" in fired_rules \
+                or "cms_full_gc" in fired_rules \
                 or "cms_concurrent_mode_failure" in fired_rules \
                 or "cms_promotion_failed" in fired_rules \
                 or "zgc_allocation_stall" in fired_rules \
                 or "zgc_concurrent_cycle_failure" in fired_rules:
             triggers = sorted({r for r in fired_rules if r in {
-                "reclaim_low", "g1_full_gc", "cms_concurrent_mode_failure",
-                "cms_promotion_failed", "zgc_allocation_stall",
-                "zgc_concurrent_cycle_failure"}})
+                "reclaim_low", "g1_full_gc", "cms_full_gc",
+                "cms_concurrent_mode_failure", "cms_promotion_failed",
+                "zgc_allocation_stall", "zgc_concurrent_cycle_failure"}})
             _add("immediate",
                  "立即执行 jmap -dump:live,format=b,file=heap.hprof <pid>，用 MAT 分析大对象持有链",
                  "Run jmap -dump:live,format=b,file=heap.hprof <pid> immediately and analyze with MAT for holder chain",
@@ -1518,7 +1537,15 @@ def _generate_recommendations(
                      "ZGC 自适应收集器: 调整 -XX:ZAllocationSpareTolerance 或 -XX:SoftRefLRUPolicyMSPerMB 降低暂停",
                      "ZGC adaptive: tune -XX:ZAllocationSpareTolerance or -XX:SoftRefLRUPolicyMSPerMB",
                      ["gc_frequency_high"])
+            elif collector == "Shenandoah":
+                # Shenandoah uses adaptive sizing via -XX:ShenandoahMin/MaxYoungPercent
+                # and -XX:ShenandoahAdaptive* — -Xmn is not the right knob.
+                _add("tuning",
+                     "Shenandoah 自适应: 调整 -XX:ShenandoahMinYoungPercent / -XX:ShenandoahMaxYoungPercent 或 -XX:ShenandoahInitiatingHeapOccupancyPercent 提前触发 GC",
+                     "Shenandoah adaptive: tune -XX:ShenandoahMinYoungPercent / -XX:ShenandoahMaxYoungPercent or -XX:ShenandoahInitiatingHeapOccupancyPercent to trigger GC earlier",
+                     ["gc_frequency_high"])
             else:
+                # Parallel, Serial, CMS — these use fixed-size young gen, -Xmn is correct.
                 _add("tuning",
                      "考虑增大 -Xmn 年轻代大小或降低分配速率",
                      "Consider larger Young Gen (-Xmn) or reducing allocation rate",
@@ -1538,6 +1565,25 @@ def _generate_recommendations(
                  "应用吞吐率 < 90%, 暂停时间占比过高, 建议分析分配热点 (async-profiler / JFR) 并减少短期对象分配",
                  "Throughput < 90%, pause time dominates — profile allocation hotspots (async-profiler / JFR) and reduce short-lived object allocation",
                  ["throughput_low"])
+
+        # Medium-severity recommendations — give users actionable advice when
+        # they see "warn" but no high finding. Without this, medium findings
+        # appear without specific tuning hints, leaving the user guessing.
+        if any(f["rule"] == "gc_frequency_high" and f["severity"] == "medium" for f in findings):
+            _add("tuning",
+                 "GC 频率偏高, 建议先用 -Xlog:gc 观察分配模式, 适当调大年轻代或降低分配速率",
+                 "GC frequency elevated. Use -Xlog:gc to observe allocation patterns, consider larger Young Gen or reducing allocation rate",
+                 ["gc_frequency_high"])
+        if any(f["rule"] == "throughput_low" and f["severity"] == "medium" for f in findings):
+            _add("profiling",
+                 "吞吐率 90-95%, GC 暂停开始挤压应用可用时间. 建议先用 JFR 或 async-profiler 评估是否需要调小年轻代或降低分配速率",
+                 "Throughput 90-95%, GC pauses are squeezing application time. Use JFR or async-profiler to evaluate if smaller Young Gen or reduced allocation rate is needed",
+                 ["throughput_low"])
+        if any(f["rule"] == "stw_time_ratio_high" and f["severity"] == "medium" for f in findings):
+            _add("tuning",
+                 "GC 暂停时间占比 5-10%, 应用可用时间被吞噬. 建议先调优 GC 参数 (取决于收集器) 再考虑扩容",
+                 "GC pauses consume 5-10% of log duration. Tune GC parameters (collector-specific) before considering heap expansion",
+                 ["stw_time_ratio_high"])
 
     # Sort: immediate → short_term → tuning → profiling; within tier, more
     # triggered_by first (broader rule coverage wins).
