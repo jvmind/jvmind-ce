@@ -552,16 +552,17 @@ def test_stw_time_ratio_high_high():
 
 
 def test_gc_frequency_young_high():
-    """young_per_min >= 60 → high。"""
-    events = [_make_event(i, "Young", 10, before_mb=500, after_mb=400) for i in range(100)]
+    """young_per_min >= 60 + 60ms avg pause → high (context-aware)."""
+    events = [_make_event(i, "Young", 60, before_mb=500, after_mb=400) for i in range(100)]
     stats = _base_stats(
         events_per_minute=60.0,
-        total_pause_ms=1000.0,
+        total_pause_ms=6000.0,
+        throughput=0.90,
         by_category={
             "Young": {
-                "count": 100, "total_pause_ms": 1000.0,
-                "avg_pause_ms": 10.0, "max_pause_ms": 50.0,
-                "p95_pause_ms": 30.0, "p99_pause_ms": 45.0,
+                "count": 100, "total_pause_ms": 6000.0,
+                "avg_pause_ms": 60.0, "max_pause_ms": 100.0,
+                "p95_pause_ms": 90.0, "p99_pause_ms": 100.0,
                 "avg_freed_mb": 5.0, "total_freed_mb": 500.0,
             },
         },
@@ -1244,16 +1245,17 @@ def test_recommendations_include_heap_dump_on_reclaim_low_high():
 
 
 def test_recommendations_young_gen_tuning_on_gc_frequency_young_high():
-    """Young GC frequency high → 非 G1 收集器 tuning tier 推荐 -Xmn。"""
-    events = [_make_event(i, "Young", 5, before_mb=500, after_mb=400) for i in range(100)]
+    """Young GC frequency high + pressure → 非 G1 收集器 tuning tier 推荐 -Xmn。"""
+    events = [_make_event(i, "Young", 60, before_mb=500, after_mb=400) for i in range(100)]
     stats = _base_stats(
         events_per_minute=100.0,
-        total_pause_ms=500.0,
+        total_pause_ms=6000.0,
+        throughput=0.90,
         by_category={
             "Young": {
-                "count": 100, "total_pause_ms": 500.0,
-                "avg_pause_ms": 5.0, "max_pause_ms": 10.0,
-                "p95_pause_ms": 8.0, "p99_pause_ms": 10.0,
+                "count": 100, "total_pause_ms": 6000.0,
+                "avg_pause_ms": 60.0, "max_pause_ms": 100.0,
+                "p95_pause_ms": 90.0, "p99_pause_ms": 100.0,
                 "avg_freed_mb": 5.0, "total_freed_mb": 500.0,
             },
         },
@@ -1268,15 +1270,16 @@ def test_recommendations_young_gen_tuning_on_gc_frequency_young_high():
 
 def test_recommendations_g1_does_not_suggest_xmn_for_high_young_frequency():
     """G1 是自适应收集器, -Xmn 会禁用自适应 Region — 不应出现在 G1 tuning tier。"""
-    events = [_make_event(i, "Young", 5, before_mb=500, after_mb=400) for i in range(100)]
+    events = [_make_event(i, "Young", 60, before_mb=500, after_mb=400) for i in range(100)]
     stats = _base_stats(
         events_per_minute=100.0,
-        total_pause_ms=500.0,
+        total_pause_ms=6000.0,
+        throughput=0.90,
         by_category={
             "Young": {
-                "count": 100, "total_pause_ms": 500.0,
-                "avg_pause_ms": 5.0, "max_pause_ms": 10.0,
-                "p95_pause_ms": 8.0, "p99_pause_ms": 10.0,
+                "count": 100, "total_pause_ms": 6000.0,
+                "avg_pause_ms": 60.0, "max_pause_ms": 100.0,
+                "p95_pause_ms": 90.0, "p99_pause_ms": 100.0,
                 "avg_freed_mb": 5.0, "total_freed_mb": 500.0,
             },
         },

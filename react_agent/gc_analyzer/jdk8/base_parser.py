@@ -24,6 +24,17 @@ _RE_HEAP = re.compile(
     r"\((?P<ht>\d+(?:\.\d+)?)(?P<htu>[BKMG])\)"
 )
 
+# Metaspace 变化 (jdk8u40+): [Metaspace: 200000K->200200K(1200000K)]
+# 独立 segment，与 [PSYoungGen]/[ParOldGen] 并列出现（"," 分隔）。
+# Metaspace 不属于堆代际 — 它独立成段，不进入 _RE_GEN 列表（避免 G1/CMS 日志误判为 Young）。
+_RE_METASPACE = re.compile(
+    r"\[Metaspace:\s*"
+    r"(?P<mb>\d+(?:\.\d+)?)(?P<mbu>[BKMG])\s*->\s*"
+    r"(?P<ma>\d+(?:\.\d+)?)(?P<mau>[BKMG])\s*"
+    r"\((?P<mt>\d+(?:\.\d+)?)(?P<mtu>[BKMG])\)"
+    r"\s*\]"
+)
+
 # G1 detail line: [Eden: ... Survivors: ... Heap: 26014.0K(65536.0K)->8396.5K(65536.0K)]
 _RE_G1_HEAP_DETAIL = re.compile(
     r"Heap:\s*"
@@ -49,7 +60,26 @@ _RE_GC_CAUSE = re.compile(r"\[(?:Full )?GC\s+\((.*?)\)\s+")
 _RE_G1_PAUSE = re.compile(r"\[GC\s+pause\s+\(([^)]+)\)\s*\((young|mixed|initial-mark)\)(?:\s+\(([^)]+)\))?")
 
 # Concurrent phases: [GC concurrent-mark-start] / [GC concurrent-mark-end, 0.199 secs]
+# Standard format ends with `]`. Note: G1's `concurrent-string-deduplication` has
+# additional data (heap delta, avg %, secs) before the closing `]`, so it does
+# NOT match this regex and is handled separately below.
 _RE_CONCURRENT = re.compile(r"\[GC\s+(concurrent-[a-z-]+(?:-start|-end)?)(?:[,\s]+([\d.]+)\s*secs)?\]")
+
+# G1-specific concurrent phases with heap-delta and avg % in the body.
+# Examples: [GC concurrent-string-deduplication, 1685.2K->788.0K(897.2K), avg 53.2%, 0.0026717 secs]
+# The K→MB heap values here are the String dedup region size, NOT the main Java
+# heap. We match just the prefix to detect these without absorbing the wrong heap.
+_RE_CONCURRENT_DEDUP = re.compile(r"\[GC\s+(concurrent-string-deduplication)\b")
+
+# CMS concurrent phases. Unlike G1, CMS uses `[CMS-concurrent-XXX]` WITHOUT a
+# `[GC ` prefix. Two sub-formats:
+#   - start marker:   [CMS-concurrent-mark-start]
+#   - completion:     [CMS-concurrent-mark: 0.004/0.004 secs]  (first num = current
+#                     cycle duration, second = cumulative)
+# These were previously dropped silently because _RE_CONCURRENT requires `[GC `.
+_RE_CMS_CONCURRENT = re.compile(
+    r"\[CMS-concurrent-([a-z-]+?)(?:[:,]\s*([\d.]+)(?:/([\d.]+))?\s*secs?)?\]"
+)
 
 # G1 remark: [GC remark ... , X.XXXXXXX secs]
 _RE_REMARK = re.compile(r"\[GC\s+remark\s+.*?,\s+([\d.]+)\s*secs\]")
@@ -108,7 +138,7 @@ def _extract_duration_secs(body: str) -> float:
 
 def _extract_heap(body: str) -> Optional[Tuple[str, str, str, str, str, str]]:
     """Extract last overall heap change (hb, hbu, ha, hau, ht, htu).
-    
+
     Skips Metaspace/PermGen/gen-level matches that usually come after the overall heap.
     """
     matches = list(_RE_HEAP.finditer(body))
@@ -123,6 +153,22 @@ def _extract_heap(body: str) -> Optional[Tuple[str, str, str, str, str, str]]:
         return m.groups()
     # Fallback: return last match if we didn't find any non-gen matches (shouldn't happen)
     return matches[-1].groups()
+
+
+def _extract_metaspace(body: str) -> Optional[Tuple[float, float, float]]:
+    """Extract Metaspace heap change (before_mb, after_mb, total_mb) from event body.
+
+    Returns None if no [Metaspace: ...] segment is present (jdk8u40- or collectors
+    that don't print Metaspace).
+    """
+    m = _RE_METASPACE.search(body)
+    if not m:
+        return None
+    return (
+        _to_mb(float(m.group("mb")), m.group("mbu")),
+        _to_mb(float(m.group("ma")), m.group("mau")),
+        _to_mb(float(m.group("mt")), m.group("mtu")),
+    )
 
 
 def _extract_g1_heap_detail(body: str) -> Optional[Tuple[str, str, str, str, str, str]]:
@@ -168,19 +214,20 @@ def _classify_concurrent(phase: str) -> str:
 
 
 def _preprocess_lines(text: str) -> List[str]:
-    """Preprocess JDK8 lines: merge [Times: continuations and indented GC detail lines, skip heap dump blocks."""
-    lines = text.splitlines()
-    merged = []
-    for raw_line in lines:
-        line = raw_line.rstrip("\r\n").strip()
-        if not line:
-            continue
-        if line.startswith("{") or line.startswith("Heap before GC") or line.startswith("Heap after GC"):
-            continue
-        if line.startswith("[Times:") and merged:
-            merged[-1] = merged[-1] + " " + line
-        elif raw_line.startswith((" ", "\t")) and merged and re.search(r"\[(?:Full )?GC\s", merged[-1]):
-            merged[-1] = merged[-1] + " " + line
-        else:
-            merged.append(line)
-    return merged
+    """Preprocess JDK8 lines via the state machine, then flatten to merged
+    single-line strings (backward compat with metric extractors).
+
+    Background: The original implementation used a single merged-list with
+    implicit conditions ("merged[-1] is an open event when its body contains
+    `[GC (` but not `secs]`"). This was fragile and dropped unindented
+    continuation lines (AdaptiveSizeStart, PSAdaptiveSizePolicy, etc.) seen
+    in renaissance page-rank logs.
+
+    The state machine (preprocess_state.py) splits the log into raw events
+    (each with raw_lines metadata). Then we flatten back to merged single-line
+    strings for the existing metric extractors (_extract_heap, _extract_cause,
+    _extract_pause, _RE_PARALLEL, etc.) that operate on a single string.
+    """
+    from .preprocess_state import _flatten_to_merged_lines, parse_to_raw_events
+    events = parse_to_raw_events(text)
+    return _flatten_to_merged_lines(events)

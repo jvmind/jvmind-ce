@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import List, Optional
 
 # ---------- 单位换算 ----------
 _UNIT_MB = {"B": 1 / 1024 / 1024, "K": 1 / 1024, "M": 1.0, "G": 1024.0}
@@ -43,5 +43,26 @@ class GCEvent:
     heap_total_mb: float = 0.0
     duration_ms: float = 0.0
     raw_type: str = ""            # 原始的 type 字符串，用于调试
-    raw_body: str = ""            # 原始完整日志行主体（含 type + heap + duration）
+    raw_body: str = ""            # 原始完整日志行主体（含 type + heap + duration）。与 raw_lines 互为派生，二者只能显式提供其一。
+    raw_lines: List[str] = field(default_factory=list)  # 原始行序列（多行事件=列表）。与 raw_body 互为派生。
+    metaspace_before_mb: Optional[float] = None  # Metaspace 使用前（jdk8u40+ 出现）
+    metaspace_after_mb: Optional[float] = None   # Metaspace 回收后
+    metaspace_total_mb: Optional[float] = None   # Metaspace 总容量
     is_concurrent: bool = False    # 是否为非 STW 并发阶段
+
+    def __post_init__(self) -> None:
+        """Validate and synchronize raw_body / raw_lines.
+
+        Rules:
+          - If raw_lines is provided (non-empty) and raw_body is empty, populate
+            raw_body = "\n".join(raw_lines).
+          - If raw_body is provided (non-empty) and raw_lines is empty, populate
+            raw_lines = raw_body.split("\n").
+          - If both are provided, raw_lines wins (raw_body overwritten).
+        """
+        if self.raw_lines and not self.raw_body:
+            self.raw_body = "\n".join(self.raw_lines)
+        elif self.raw_body and not self.raw_lines:
+            self.raw_lines = self.raw_body.split("\n")
+        elif self.raw_lines and self.raw_body:
+            self.raw_body = "\n".join(self.raw_lines)

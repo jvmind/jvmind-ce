@@ -46,6 +46,17 @@ RULE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "applies_to": "all",
         "thresholds": {"post_gc_pct": 0.85},
     },
+    "metaspace_pressure": {
+        # "Metadata GC Threshold" Full GC is triggered by HotSpot when
+        # Metaspace (class metadata) exceeds its soft limit. This is class
+        # loading / classloader hygiene, NOT heap pressure — the right
+        # remediation is `-XX:MetaspaceSize` tuning and reducing dynamic
+        # class generation (CGLIB, reflection proxies, JPA proxies),
+        # NOT GC tuning. Fires when ≥ 3 such Full GC appear in the log.
+        "category": "performance",
+        "applies_to": "all",
+        "thresholds": {"min_count": 3},
+    },
     "explicit_gc_called": {
         "category": "performance",
         "applies_to": "all",
@@ -158,6 +169,23 @@ RULE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
 
 
 # =============================================================================
+# Module-level state for cross-rule signaling
+# =============================================================================
+
+# Populated by `_rule_young_gc_frequency` when young GC frequency is observed
+# high but the heuristic determines the collector is working as designed
+# (low pause times, high reclaim ratio). Read by `_compute_root_cause` to
+# emit a "healthy high frequency" annotation in the summary instead of a finding.
+# Cleared at the start of every `_diagnose_memory` call.
+_HEALTHY_HIGH_FREQ: Dict[str, Any] = {}
+
+
+def _reset_healthy_high_freq() -> None:
+    """Clear the cross-rule state. Called by `_diagnose_memory` at entry."""
+    _HEALTHY_HIGH_FREQ.clear()
+
+
+# =============================================================================
 # Rule functions — each returns a list of findings (or empty list)
 # Signature: (events, collector, stats) -> List[dict]
 # =============================================================================
@@ -248,92 +276,264 @@ def _is_manual_full_gc(event) -> bool:
     ))
 
 
+def _is_jvm_internal_full_gc(event) -> bool:
+    """Return True if the Full GC was triggered by JVM-internal housekeeping.
+
+    These triggers indicate JVM-managed resource pressure, NOT heap pressure:
+
+    - `Metadata GC Threshold` — class metadata / classloader data in Metaspace
+      exceeded its soft limit. HotSpot runs a Full GC to free class metadata
+      before extending Metaspace. The fix is to reduce dynamic class generation
+      (CGLIB, reflection proxies, JPA proxies) or raise `-XX:MetaspaceSize`,
+      NOT to tune Young Gen or heap size.
+
+    - `Last Ditch Collection` — G1's last-resort before OOM, triggered when
+      the JVM is about to fail a metadata allocation. Often a real pressure
+      signal but its cause (class metadata exhaustion) is different from
+      application-heap pressure, so we count it separately from "real" Full GC
+      while still noting its presence in diagnostics.
+
+    Without this exclusion, `_rule_full_gc_frequency` mistakes class-loading
+    churn for heap pressure and recommends `-Xmn` adjustments that don't help.
+    """
+    text = ((event.raw_body or "") + " " + (event.cause or "")).lower()
+    return any(marker in text for marker in (
+        "metadata gc threshold",
+        "last ditch collection",
+    ))
+
+
 def _rule_gc_frequency_high(events, collector, stats) -> List[Dict[str, Any]]:
-    epm = stats.get("events_per_minute")
-    if epm is None:
-        return []
+    """Dispatcher for context-aware GC frequency rules.
+
+    Replaces the original pure-rate threshold check. Frequency alone is no
+    longer the trigger — it must correlate with pause duration, throughput,
+    or reclaim ratio. The two sub-rules preserve the existing `gc_frequency_high`
+    rule ID for backward compatibility (frontend rule_definitions, EVIDENCE_RULES).
+
+    Returns Young GC + Full GC findings combined. Either branch may be skipped
+    entirely if the context doesn't support the firing.
+    """
+    return _rule_young_gc_frequency(events, collector, stats) \
+        + _rule_full_gc_frequency(events, collector, stats)
+
+
+def _compute_category_reclaim_ratio(events: List[GCEvent],
+                                    *, exclude_manual: bool = False,
+                                    exclude_jvm_internal: bool = False) -> float:
+    """Average heap reclaim ratio across events.
+
+    Reclaim = (heap_before - heap_after) / heap_before, expressed as a
+    fraction in [0, 1]. Returns 0.0 if no events have valid before/after.
+
+    When `exclude_manual=True`, manual Full GC triggers (System.gc() /
+    heap dump / heap inspection) are skipped — they reclaim massively
+    because the heap isn't pressured, which would inflate the ratio and
+    mask real reclamation problems.
+
+    When `exclude_jvm_internal=True`, JVM-internal Full GC triggers
+    (Metaspace housekeeping / Last Ditch) are skipped — they reclaim
+    little heap (their cause is class-metadata exhaustion, not heap
+    pressure), which would deflate the ratio and mask healthy reclaim.
+    """
+    reclaims: List[float] = []
+    for e in events:
+        if exclude_manual and _is_manual_full_gc(e):
+            continue
+        if exclude_jvm_internal and _is_jvm_internal_full_gc(e):
+            continue
+        if e.heap_before_mb > 0 and e.heap_after_mb >= 0:
+            reclaims.append((e.heap_before_mb - e.heap_after_mb) / e.heap_before_mb)
+    if not reclaims:
+        return 0.0
+    return sum(reclaims) / len(reclaims)
+
+
+def _rule_young_gc_frequency(events, collector, stats) -> List[Dict[str, Any]]:
+    """Young GC frequency — context-aware.
+
+    Frequency alone is meaningless. The rule fires only when frequency is
+    correlated with at least one of:
+      - high average pause time (>= 50ms)
+      - degraded throughput (< 0.95)
+      - low reclaim ratio (< 50%)
+
+    Collectors exempt by design: Z, Shenandoah, Epsilon.
+    These aim for high cycle frequency with sub-millisecond pauses; their
+    frequency should be judged by `stw_time_ratio_high` / `zgc_pause_exceeds_target`,
+    not by raw rate.
+
+    Healthy high frequency (high rate + short pauses + high reclaim) is
+    NOT a finding — instead, the summary gets a "healthy_high_freq_young"
+    annotation so the user sees the observation without an actionable alert.
+    """
     by_cat = stats.get("by_category", {}) or {}
     young_cat = by_cat.get("Young", {}) or {}
-    full_cat = by_cat.get("Full", {}) or {}
     duration_sec = stats.get("duration_sec") or 0
+    throughput = stats.get("throughput")
     th = RULE_DEFINITIONS["gc_frequency_high"]["thresholds"]
 
-    findings: List[Dict[str, Any]] = []
+    if duration_sec <= 0:
+        return []
+
+    # Collector exemption: ZGC, Shenandoah, Epsilon are designed for high
+    # frequency cycles. Don't pollute findings with their design traits.
+    if collector in {"Z", "Shenandoah", "Epsilon"}:
+        return []
+
     young_count = young_cat.get("count", 0)
-    full_count = full_cat.get("count", 0)
+    young_per_min = young_count / duration_sec * 60
+    if young_count < 3:
+        return []
 
-    # Young GC frequency (per-minute)
-    young_per_min = (young_count / duration_sec * 60) if duration_sec > 0 else 0
-    if young_per_min >= th["young_per_min"]["high"] and young_count >= 3:
-        findings.append(_make_finding(
-            "gc_frequency_high", "high",
-            f"Young GC 频率过高 ({young_per_min:.0f} 次/分钟)",
-            f"Young GC frequency too high ({young_per_min:.0f}/min)",
-            f"Young GC {young_per_min:.0f} 次/分钟，{young_count} 次事件，超 60 次/分钟高风险阈值",
-            f"{young_count} Young GCs at {young_per_min:.0f}/min, exceeding 60/min high-risk threshold",
-        ))
-    elif young_per_min >= th["young_per_min"]["medium"] and young_count >= 3:
-        findings.append(_make_finding(
-            "gc_frequency_high", "medium",
-            f"Young GC 频率较高 ({young_per_min:.0f} 次/分钟)",
-            f"Young GC frequency elevated ({young_per_min:.0f}/min)",
-            f"Young GC {young_per_min:.0f} 次/分钟，超 30 次/分钟警告阈值",
-            f"Young GCs at {young_per_min:.0f}/min, exceeding 30/min warning threshold",
-        ))
+    young_avg_pause_ms = young_cat.get("avg_pause_ms", 0) or 0
+    young_events = [e for e in events if e.category == "Young"]
+    young_reclaim_ratio = _compute_category_reclaim_ratio(young_events)
 
-    # Full GC frequency (per-minute) — only count REAL (non-manual) Full GC.
+    # Healthy high frequency: no pressure signal. Forward to summary instead.
+    if young_per_min >= th["young_per_min"]["high"]:
+        if young_avg_pause_ms < 10 and young_reclaim_ratio >= 0.5:
+            _HEALTHY_HIGH_FREQ["young"] = {
+                "per_min": young_per_min,
+                "avg_pause_ms": young_avg_pause_ms,
+                "reclaim_ratio": young_reclaim_ratio,
+                "count": young_count,
+            }
+            return []
+
+    # Context-aware severity: frequency must correlate with a pressure signal.
+    severity = None
+    young_high_th = th["young_per_min"]["high"]
+    young_med_th = th["young_per_min"]["medium"]
+
+    if young_per_min >= young_high_th:
+        if young_avg_pause_ms >= 50 or (throughput is not None and throughput < 0.95):
+            severity = "high"
+        elif young_avg_pause_ms >= 30 or (throughput is not None and throughput < 0.97):
+            severity = "medium"
+    elif young_per_min >= young_med_th:
+        if young_avg_pause_ms >= 30 or (throughput is not None and throughput < 0.97):
+            severity = "medium"
+
+    if not severity:
+        return []
+
+    return [_make_finding(
+        "gc_frequency_high", severity,
+        f"Young GC 频率过高 ({young_per_min:.0f} 次/分钟)",
+        f"Young GC frequency too high ({young_per_min:.0f}/min)",
+        (f"Young GC {young_per_min:.0f} 次/分钟，{young_count} 次事件，"
+         f"平均暂停 {young_avg_pause_ms:.0f}ms，回收率 {young_reclaim_ratio*100:.0f}%"
+         f"{f'，吞吐率 {throughput*100:.1f}%' if throughput is not None else ''}"),
+        (f"{young_count} Young GCs at {young_per_min:.0f}/min, "
+         f"avg pause {young_avg_pause_ms:.0f}ms, reclaim {young_reclaim_ratio*100:.0f}%"
+         f"{f', throughput {throughput*100:.1f}%' if throughput is not None else ''}"),
+    )]
+
+
+def _rule_full_gc_frequency(events, collector, stats) -> List[Dict[str, Any]]:
+    """Full GC frequency — context-aware.
+
+    Sample-size-aware severity (statistical confidence):
+      - count < 3: don't fire (single event is noise)
+      - count 3-4 + rate >= threshold: medium
+      - count >= 5 + rate >= threshold: high
+
+    Additional suppression:
+      - throughput_low already fires high → suppress (avoid double-reporting)
+      - Full GC reclaim ratio > 50% → suppress (heap is reclaiming successfully)
+    """
+    duration_sec = stats.get("duration_sec") or 0
+    throughput = stats.get("throughput")
+    th = RULE_DEFINITIONS["gc_frequency_high"]["thresholds"]
+
+    if duration_sec <= 0:
+        return []
+
+    # Only count REAL (non-manual, non-JVM-internal) Full GC.
     # Manual Full GC (System.gc() / heap dump / heap inspection) are handled
     # by explicit_gc_called and should not inflate gc_frequency_high.
-    #
-    # Sample-size-aware severity (statistical confidence):
-    # - count < 3: don't fire (single event is noise)
-    # - count 3-4 + rate >= threshold: medium (rate high but small sample;
-    #   transient burst possible in short logs)
-    # - count >= 5 + rate >= threshold: high (confident sustained pressure)
-    # This prevents over-alerting on short log windows where 1-3 events look
-    # like a high per-minute rate but may be transient.
+    # JVM-internal triggers (Metaspace housekeeping, Last Ditch) are NOT heap
+    # pressure — their tuning advice differs (MetaspaceSize, classloader
+    # hygiene) and would mislead users if surfaced as gc_frequency_high.
     real_full_events = [e for e in events
-                        if e.category == "Full" and not _is_manual_full_gc(e)]
+                        if e.category == "Full"
+                        and not _is_manual_full_gc(e)
+                        and not _is_jvm_internal_full_gc(e)]
+    manual_count = sum(1 for e in events
+                       if e.category == "Full"
+                       and _is_manual_full_gc(e))
+    jvm_internal_count = sum(1 for e in events
+                             if e.category == "Full"
+                             and _is_jvm_internal_full_gc(e))
     real_full_count = len(real_full_events)
-    real_full_per_min = (real_full_count / duration_sec * 60) if duration_sec > 0 else 0
+    real_full_per_min = (real_full_count / duration_sec * 60)
     rate_threshold = th["full_per_min"]["high"]
 
-    # Determine severity based on sample size + rate
+    # Sample-size-aware severity
     severity = None
     if real_full_count >= 5 and real_full_per_min >= rate_threshold:
         severity = "high"
     elif real_full_count >= 3 and real_full_per_min >= rate_threshold:
         severity = "medium"
 
-    if severity:
-        # Mention manual count for context
-        manual_note = ""
-        if full_count > real_full_count:
-            manual_n = full_count - real_full_count
-            manual_note_zh = f"（另有 {manual_n} 次手动触发）"
-            manual_note_en = f" ({manual_n} manual trigger{'s' if manual_n > 1 else ''} excluded)"
-        else:
-            manual_note_zh = manual_note_en = ""
-        # Duration context for short logs (helps user judge transient vs sustained)
-        duration_note = ""
-        if duration_sec > 0 and duration_sec < 60 and real_full_count < 5:
-            duration_note_zh = f"日志仅 {duration_sec:.0f}s, 样本量小, 可能是瞬时高峰"
-            duration_note_en = f"log spans only {duration_sec:.0f}s — small sample, may be transient"
-        else:
-            duration_note_zh = duration_note_en = ""
+    if not severity:
+        return []
 
-        findings.append(_make_finding(
-            "gc_frequency_high", severity,
-            f"Full GC 频率过高 ({real_full_per_min:.2f} 次/分钟)",
-            f"Full GC frequency too high ({real_full_per_min:.2f}/min)",
-            (f"Full GC {real_full_count} 次，平均 {real_full_per_min:.2f} 次/分钟"
-             f"（约 {60/real_full_per_min:.0f} 秒 1 次）{manual_note_zh}。"
-             f"{duration_note_zh}"),
-            (f"{real_full_count} Full GCs, ~{60/real_full_per_min:.0f}s apart{manual_note_en}. "
-             f"{duration_note_en}"),
-        ))
+    # Suppression 1: throughput_low already fires high → suppress to avoid
+    # double-reporting. Frequency is just a symptom of the throughput issue.
+    if throughput is not None and throughput < 0.90:
+        return []
 
-    return findings
+    # Suppression 2: high reclaim ratio → heap is reclaiming successfully,
+    # not a real pressure signal. (Manual-trigger and JVM-internal Full GC
+    # are excluded — manual reclaims too much, JVM-internal too little, so
+    # both would skew the average away from the real heap-pressure signal.)
+    full_reclaim_ratio = _compute_category_reclaim_ratio(
+        [e for e in events if e.category == "Full"],
+        exclude_manual=True,
+        exclude_jvm_internal=True,
+    )
+    if full_reclaim_ratio > 0.5:
+        return []
+
+    # Context note: manual (System.gc / heap dump) and JVM-internal
+    # (Metaspace / Last Ditch) triggers are excluded from the real count —
+    # name each separately so users aren't misled into thinking JVM-internal
+    # Full GCs are manual ones.
+    excluded_bits_zh = []
+    excluded_bits_en = []
+    if manual_count > 0:
+        excluded_bits_zh.append(f"{manual_count} 次手动触发")
+        excluded_bits_en.append(f"{manual_count} manual trigger{'s' if manual_count > 1 else ''}")
+    if jvm_internal_count > 0:
+        excluded_bits_zh.append(f"{jvm_internal_count} 次 JVM 内部触发")
+        excluded_bits_en.append(f"{jvm_internal_count} JVM-internal trigger{'s' if jvm_internal_count > 1 else ''}")
+    if excluded_bits_zh:
+        manual_note_zh = f"（另有 {'、'.join(excluded_bits_zh)} 未计入）"
+    else:
+        manual_note_zh = ""
+    if excluded_bits_en:
+        manual_note_en = f" ({', '.join(excluded_bits_en)} excluded)"
+    else:
+        manual_note_en = ""
+
+    # Duration context for short logs
+    duration_note_zh = duration_note_en = ""
+    if duration_sec < 60 and real_full_count < 5:
+        duration_note_zh = f"日志仅 {duration_sec:.0f}s, 样本量小, 可能是瞬时高峰"
+        duration_note_en = f"log spans only {duration_sec:.0f}s — small sample, may be transient"
+
+    return [_make_finding(
+        "gc_frequency_high", severity,
+        f"Full GC 频率过高 ({real_full_per_min:.2f} 次/分钟)",
+        f"Full GC frequency too high ({real_full_per_min:.2f}/min)",
+        (f"Full GC {real_full_count} 次，平均 {real_full_per_min:.2f} 次/分钟"
+         f"（约 {60/real_full_per_min:.0f} 秒 1 次）{manual_note_zh}。"
+         f"{duration_note_zh}"),
+        (f"{real_full_count} Full GCs, ~{60/real_full_per_min:.0f}s apart{manual_note_en}. "
+         f"{duration_note_en}"),
+    )]
 
 
 def _rule_reclaim_low(events, collector, stats) -> List[Dict[str, Any]]:
@@ -610,7 +810,7 @@ def _rule_g1_compaction_pause(events, collector, stats) -> List[Dict[str, Any]]:
         return []
     compaction_count = sum(
         1 for e in events
-        if e.category == "Full"
+        if e.category in ("Full", "Mixed")
         and "g1 compaction pause" in ((e.raw_body or "") + " " + (e.cause or "")).lower()
     )
     th = RULE_DEFINITIONS["g1_compaction_pause"]["thresholds"]
@@ -1013,6 +1213,65 @@ def _rule_cms_remark_too_long(events, collector, stats) -> List[Dict[str, Any]]:
     )]
 
 
+def _rule_metaspace_pressure(events, collector, stats) -> List[Dict[str, Any]]:
+    """Metaspace housekeeping triggered Full GC (not heap pressure).
+
+    Fires when ≥ min_count Full GC events are caused by `Metadata GC Threshold`
+    (HotSpot expanding Metaspace) or `Last Ditch Collection` (G1 last-resort
+    for class metadata). These are JVM-internal housekeeping triggers, NOT
+    application-heap pressure.
+
+    Reported separately from `gc_frequency_high` because the remediation
+    is different: tune `-XX:MetaspaceSize` and reduce dynamic class
+    generation (CGLIB, reflection proxies, JPA entity proxies) instead of
+    `-Xmn` or heap sizing.
+
+    Suppression: when ALL metaspace Full GC events concentrate in the
+    first 10% of the log's uptime span AND the log is at least 60s long,
+    treat as startup-only (JVM's lazy Metaspace initialization) and
+    suppress — this is normal warmup, not a sustained class-loading
+    pressure signal. User feedback: "Metadata GC Threshold happens at
+    startup, generally not a problem".
+    """
+    th = RULE_DEFINITIONS["metaspace_pressure"]["thresholds"]
+    min_count = th["min_count"]
+    jvm_internal = [e for e in events
+                    if e.category == "Full" and _is_jvm_internal_full_gc(e)]
+    if len(jvm_internal) < min_count:
+        return []
+
+    # Startup suppression: detect concentrated-at-startup pattern.
+    # HotSpot lazily initializes Metaspace on JVM start and triggers
+    # several Metadata GC Threshold Full GC during the first ~60s as
+    # classloaders fill the soft limit. This is normal warmup, NOT a
+    # sustained class-loading problem.
+    #
+    # Detection: if the LATEST metaspace Full GC happens within 60 seconds
+    # of the FIRST GC event in the log, every metaspace Full GC clustered
+    # at startup → suppress. Works for both short (captured-startup-only)
+    # and long logs; doesn't require a specific total log span.
+    all_uptimes = [e.uptime_sec for e in events
+                   if e.uptime_sec is not None]
+    meta_uptimes = [e.uptime_sec for e in jvm_internal
+                    if e.uptime_sec is not None]
+    if all_uptimes and meta_uptimes:
+        log_first = min(all_uptimes)
+        meta_max = max(meta_uptimes)
+        if (meta_max - log_first) <= 60.0:
+            return []
+
+    total_pause = sum(e.duration_ms for e in jvm_internal)
+    return [_make_finding(
+        "metaspace_pressure", "medium",
+        "Full GC 由元数据空间 / Last Ditch 触发",
+        "Full GC triggered by Metaspace housekeeping / Last Ditch",
+        (f"{len(jvm_internal)} 次 Full GC 由 Metadata GC Threshold / Last Ditch Collection 触发, "
+         f"累计暂停 {total_pause:.0f}ms. 这是类加载行为问题, 不是堆压力"),
+        (f"{len(jvm_internal)} Full GCs triggered by Metadata GC Threshold / Last Ditch Collection, "
+         f"total pause {total_pause:.0f}ms. Class-loading hygiene, not heap pressure"),
+    )]
+
+
 def _rule_cms_fragmentation(events, collector, stats) -> List[Dict[str, Any]]:
     """CMS 老年代碎片化: Full GC + post-GC 仍 < 70% (堆不挤但仍 Full GC = 碎片化)。
 
@@ -1179,6 +1438,7 @@ RULES: List[Tuple[Optional[str], Callable]] = [
     (None, _rule_alloc_failure_full),
     (None, _rule_explicit_gc_called),
     (None, _rule_single_pause_long),
+    (None, _rule_metaspace_pressure),
     # CMS-specific
     ("CMS", _rule_cms_full_gc),
     ("CMS", _rule_cms_concurrent_mode_failure),
@@ -1370,6 +1630,10 @@ def _compute_root_cause(risks: Dict[str, str], findings: List[Dict[str, Any]],
 
     Summary text uses a collector-specific variant for OOM when available
     (e.g., ZGC Allocation Stall + reclaim_low).
+
+    When `_HEALTHY_HIGH_FREQ` is non-empty (no other findings fired), the
+    summary is upgraded with the young/Full GC frequency observation so the
+    user sees the observed rate was deemed healthy (not actionable).
     """
     if risks.get("oom_risk") in ("high", "medium"):
         category = "oom"
@@ -1388,6 +1652,27 @@ def _compute_root_cause(risks: Dict[str, str], findings: List[Dict[str, Any]],
     if collector and f"summary_en_{collector.lower()}" in summary:
         summary_zh = summary.get(f"summary_zh_{collector.lower()}", summary_zh)
         summary_en = summary[f"summary_en_{collector.lower()}"]
+
+    # Append healthy high frequency annotation when no actionable findings
+    # exist but the young GC frequency was deemed healthy-by-design.
+    if not findings and _HEALTHY_HIGH_FREQ.get("young"):
+        info = _HEALTHY_HIGH_FREQ["young"]
+        per_min = info["per_min"]
+        avg_pause = info["avg_pause_ms"]
+        reclaim = info["reclaim_ratio"] * 100
+        annotation_zh = (
+            f"Young GC 频率较高 ({per_min:.0f}次/分), "
+            f"但平均暂停仅 {avg_pause:.0f}ms, 回收率 {reclaim:.0f}% —— "
+            f"收集器自适应工作正常, 无需调整"
+        )
+        annotation_en = (
+            f"Young GC frequency elevated ({per_min:.0f}/min), "
+            f"but avg pause only {avg_pause:.0f}ms, reclaim {reclaim:.0f}% — "
+            f"collector is working as designed, no tuning needed"
+        )
+        summary_zh = f"{summary_zh}。{annotation_zh}"
+        summary_en = f"{summary_en}. {annotation_en}"
+
     return {
         "category": category,
         "label_zh": summary["label_zh"],
@@ -1525,6 +1810,11 @@ def _generate_recommendations(
                  "应用代码中调用了 System.gc(). 生产环境应启用 -XX:+DisableExplicitGC 禁用显式 GC 调用 (除非 RMI/JMX 等场景需要). 同步建议查找代码中 System.gc() 的调用位置并评估是否必要",
                  "Application code called System.gc(). Production should enable -XX:+DisableExplicitGC to disable explicit GC (unless RMI/JMX requires it). Find and review every System.gc() call in the codebase",
                  ["explicit_gc_called"])
+        if "metaspace_pressure" in fired_rules:
+            _add("tuning",
+                 "Full GC 由 Metaspace 扩容触发 (类元数据空间不足). 增大 -XX:MetaspaceSize / -XX:MaxMetaspaceSize 提前扩容, 并排查代码中的动态类生成 (CGLIB 代理 / 反射 / JPA 实体)",
+                 "Full GC triggered by Metaspace expansion (class metadata exhausted). Increase -XX:MetaspaceSize / -XX:MaxMetaspaceSize to pre-extend, and audit dynamic class generation (CGLIB proxies / reflection / JPA entities)",
+                 ["metaspace_pressure"])
 
         if "gc_frequency_high" in fired_rules:
             if collector == "G1":
@@ -1765,6 +2055,9 @@ def _diagnose_memory(events, collector, *args, **kwargs):
             "total_pause_ms": kwargs.get("total_pause_ms"),
             "events_total": kwargs.get("events_total"),
         }
+
+    # Reset cross-rule state at entry so each diagnosis is independent.
+    _reset_healthy_high_freq()
 
     findings: List[Dict[str, Any]] = []
     for scope, fn in RULES:
