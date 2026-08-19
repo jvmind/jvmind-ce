@@ -28,6 +28,7 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, "index.html"),
         report: resolve(__dirname, "report.html"),
+        mat: resolve(__dirname, "mat.html"),
       },
     },
   },

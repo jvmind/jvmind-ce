@@ -639,7 +639,7 @@ export function renderHeapdumpReportInto(container, report, options = {}) {
   const compOops = stats.useCompressedOops;
   const createdDate = stats.creationDate || stats.creationTime || "";
 
-  const reportUrl = `${location.origin}/heapdump-report/${report.id}`;
+  const reportUrl = `${location.origin}/mat/${report.id}`;
   const openLink = isStandalone ? "" : `
     <a href="${reportUrl}" target="_blank" rel="noopener" class="hd-open-mat" id="hdOpenNewBtn" title="${escapeHtml(t("heapdump.open_mat"))}">${ico('external-link')} ${escapeHtml(t("heapdump.open_mat"))}</a>`;
   const metaRow = `
