@@ -553,3 +553,33 @@ def test_proxy_500_when_dump_dir_traversal_escape(auth_client, isolated_storage,
     _set_report_done(rid, escape_path)
     r = client.get(f"/api/heapdump-reports/{rid}/overview")
     assert r.status_code == 500
+
+
+# ---------- Regression: claim._row_to_dict must not reference org_id (CE) ----------
+
+def test_claim_row_to_dict_no_org_id():
+    """CE 的 HeapdumpReportModel 没有 org_id 列；_row_to_dict 不应访问它，
+    否则 worker 在 claim 后崩溃（AttributeError）。"""
+    from react_agent.heapdump_worker.claim import _row_to_dict
+    from react_agent.models import HeapdumpReportModel
+
+    r = HeapdumpReportModel(
+        id="hd_reg",
+        session_id="sess_1",
+        user_id="user_local",
+        filename="app.hprof",
+        size=123,
+        status="PARSING",
+        progress=0.5,
+        phase="Pass1",
+        dump_dir="/tmp/dumps/hd_reg",
+        parse_args='{"xmx":"2g"}',
+        attempts=1,
+        worker_id="host:1",
+    )
+    d = _row_to_dict(r)
+    assert "org_id" not in d
+    assert d["user_id"] == "user_local"
+    assert d["id"] == "hd_reg"
+    assert d["parse_args"] == {"xmx": "2g"}
+    assert d["progress"] == 0.5

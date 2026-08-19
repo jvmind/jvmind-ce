@@ -90,7 +90,6 @@ def _row_to_dict(r: HeapdumpReportModel) -> dict:
         "id": r.id,
         "session_id": r.session_id,
         "user_id": r.user_id,
-        "org_id": r.org_id,
         "filename": r.filename,
         "size": r.size,
         "status": r.status,
