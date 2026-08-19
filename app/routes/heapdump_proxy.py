@@ -426,10 +426,13 @@ async def proxy_list_objects(request: Request, report_id: str):
     object_id = body.get("objectId")
     if direction not in ("out", "in"):
         raise HTTPException(400, "direction 必须为 'out' 或 'in' / 'direction' must be 'out' or 'in'")
-    if not isinstance(object_id, int) or object_id < 0:
+    # bool 是 int 的子类，需显式排除（{"objectId": true} 应被拒绝）
+    if not isinstance(object_id, int) or isinstance(object_id, bool) or object_id < 0:
         raise HTTPException(400, "objectId 必须为非负整数 / 'objectId' must be a non-negative integer")
+    # 只转发白名单字段，不透传客户端可能携带的其他键
+    forward_body = {"direction": direction, "objectId": object_id}
     params = {"dumpDir": r["dump_dir"]}
-    status_code, data = await _do("POST", "/list-objects", params=params, json_body=body,
+    status_code, data = await _do("POST", "/list-objects", params=params, json_body=forward_body,
                                   timeout=_TIMEOUTS["histogram"])
     _quota_incr(user_id)
     log_audit(request, "report.heapdump.query.list_objects", user_id=user_id,
@@ -461,10 +464,13 @@ async def proxy_references(
     object_id = body.get("objectId")
     if direction not in ("out", "in"):
         raise HTTPException(400, "direction 必须为 'out' 或 'in' / 'direction' must be 'out' or 'in'")
-    if not isinstance(object_id, int) or object_id < 0:
+    # bool 是 int 的子类，需显式排除（{"objectId": true} 应被拒绝）
+    if not isinstance(object_id, int) or isinstance(object_id, bool) or object_id < 0:
         raise HTTPException(400, "objectId 必须为非负整数 / 'objectId' must be a non-negative integer")
+    # 只转发白名单字段，不透传客户端可能携带的其他键
+    forward_body = {"direction": direction, "objectId": object_id}
     params = {"dumpDir": r["dump_dir"], "top": top, "offset": offset}
-    status_code, data = await _do("POST", "/references", params=params, json_body=body,
+    status_code, data = await _do("POST", "/references", params=params, json_body=forward_body,
                                   timeout=_TIMEOUTS["histogram"])
     _quota_incr(user_id)
     log_audit(request, "report.heapdump.query.references", user_id=user_id,

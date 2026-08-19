@@ -583,3 +583,35 @@ def test_claim_row_to_dict_no_org_id():
     assert d["id"] == "hd_reg"
     assert d["parse_args"] == {"xmx": "2g"}
     assert d["progress"] == 0.5
+
+
+# ---------- list-objects / references: bool objectId + body whitelist ----------
+
+def test_list_objects_rejects_bool_object_id(auth_client, fake_java, done_report):
+    client, _ = auth_client
+    rid, _ = done_report
+    # bool 是 int 子类；必须显式拒绝
+    r = client.post(f"/api/heapdump-reports/{rid}/list-objects",
+                    json={"direction": "out", "objectId": True})
+    assert r.status_code == 400
+    assert fake_java.calls == []
+
+
+def test_list_objects_forwards_only_whitelisted_fields(auth_client, fake_java, done_report):
+    client, _ = auth_client
+    rid, dd = done_report
+    fake_java.override("/list-objects", 200, {"resultSetId": "rs-9", "rows": []})
+    r = client.post(f"/api/heapdump-reports/{rid}/list-objects",
+                    json={"direction": "out", "objectId": 5, "extra": "evil", "foo": [1, 2]})
+    assert r.status_code == 200, r.text
+    sent = json.loads(fake_java.calls[-1][3])
+    assert sent == {"direction": "out", "objectId": 5}
+
+
+def test_references_rejects_bool_object_id(auth_client, fake_java, done_report):
+    client, _ = auth_client
+    rid, _ = done_report
+    r = client.post(f"/api/heapdump-reports/{rid}/references",
+                    json={"direction": "in", "objectId": False})
+    assert r.status_code == 400
+    assert fake_java.calls == []

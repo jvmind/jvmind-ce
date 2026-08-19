@@ -42,6 +42,11 @@ function st(rid) {
   return _state.get(rid);
 }
 
+/** 报表关闭时释放该报告的状态，避免长时间会话内 Map 无界增长。 */
+export function clearInspectorState(rid) {
+  _state.delete(rid);
+}
+
 /**
  * 渲染整个“对象检查”区块。container 为该区块的 body（已由调用方建好）。
  */
@@ -332,7 +337,7 @@ async function renderArrayElements(panel, rid, objectId, offset, onOpen) {
     const data = await api(`/api/heapdump-reports/${encodeURIComponent(rid)}/array-elements?id=${objectId}&top=${PAGE}&offset=${offset}`);
     if (body.dataset.key !== key) return;
     const rows = data.rows || [];
-    const html = arrayTableHtml(rows, onOpen);
+    const html = arrayTableHtml(rows);
     const more = data.cursor ? `<button class="insp-btn small" data-more>${escAttr(t("heapdump.insp_load_more"))}</button>` : "";
     body.innerHTML = html + (more ? `<div class="insp-more">${more}</div>` : "");
     bindFieldRefs(body, onOpen);
@@ -367,7 +372,7 @@ async function renderCollectionEntries(panel, rid, objectId, offset, onOpen) {
         return `<tr><td>${cell(r.key)}</td><td>${cell(r.value)}</td></tr>`;
       }).join("") + `</tbody></table>`;
     } else {
-      html = arrayTableHtml(rows, open);
+      html = arrayTableHtml(rows);
     }
     const more = data.cursor ? `<button class="insp-btn small" data-more>${escAttr(t("heapdump.insp_load_more"))}</button>` : "";
     body.innerHTML = html + (more ? `<div class="insp-more">${more}</div>` : "");
@@ -380,7 +385,7 @@ async function renderCollectionEntries(panel, rid, objectId, offset, onOpen) {
   }
 }
 
-function arrayTableHtml(rows, open) {
+function arrayTableHtml(rows) {
   const bodyRows = rows.map((r) => {
     const label = r.isNull
       ? `<span class="insp-hint">null</span>`

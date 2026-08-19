@@ -6,7 +6,7 @@ import { pollTask } from "./task-poller.js";
 import { addActiveReportContext, bindReportContext, renderActiveReportContext, removeActiveReportContextByReport, deleteReportEntries, ACTIVE_REPORT_CONTEXT_LIMIT } from "../gc-analysis/context.js";
 import { renderMarkdown } from "../markdown.js";
 import { ico } from "../icons.js";
-import { renderInspectorSection } from "./inspector.js";
+import { renderInspectorSection, clearInspectorState } from "./inspector.js";
 
 const CHUNK_SIZE = 8 * 1024 * 1024; // server default; overwritten by server response
 const ALLOWED_EXT = [".hprof", ".hprof.gz", ".bin", ".dump", ".gz"];
@@ -1448,6 +1448,7 @@ function renderHeapdumpHistoryList(reports) {
 }
 
 export function closeReport(rid) {
+  clearInspectorState(rid);
   state.openHeapdumpReports = state.openHeapdumpReports.filter(r => r.id !== rid);
   if (state.currentHeapdumpReportId === rid) {
     state.currentHeapdumpReport = null;
