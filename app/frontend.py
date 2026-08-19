@@ -83,7 +83,3 @@ def mount_frontend(app: FastAPI) -> None:
     @app.get("/heapdump-report/{rid}")
     def heapdump_report_page(rid: str):
         return FileResponse(_resolve_page("report.html"))
-
-    @app.get("/mat/{rid}")
-    def mat_page(rid: str):
-        return FileResponse(_resolve_page("mat.html"))
