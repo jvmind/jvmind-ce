@@ -131,6 +131,11 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    # /src CSS uses a stable URL (not content-hashed like /assets), so browsers
+    # cache it aggressively and miss updates. Force revalidation so style
+    # changes apply without manual cache clears.
+    if request.url.path.startswith("/src/"):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
     if state._COOKIE_SECURE:
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
