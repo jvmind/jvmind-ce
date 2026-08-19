@@ -6,6 +6,7 @@ import { pollTask } from "./task-poller.js";
 import { addActiveReportContext, bindReportContext, renderActiveReportContext, removeActiveReportContextByReport, deleteReportEntries, ACTIVE_REPORT_CONTEXT_LIMIT } from "../gc-analysis/context.js";
 import { renderMarkdown } from "../markdown.js";
 import { ico } from "../icons.js";
+import { renderInspectorSection } from "./inspector.js";
 
 const CHUNK_SIZE = 8 * 1024 * 1024; // server default; overwritten by server response
 const ALLOWED_EXT = [".hprof", ".hprof.gz", ".bin", ".dump", ".gz"];
@@ -756,6 +757,14 @@ export function renderHeapdumpReportInto(container, report, options = {}) {
         <div class="hd-section-body" id="hdClasses"></div>
       </div>
 
+      <div class="hd-collapsible-wrap" id="hdInspectorWrap">
+        <div class="hd-collapsible-head" id="hdInspectorHead">
+          <span>${escapeHtml(t("heapdump.section_inspector"))}</span>
+          <span class="arrow">▸</span>
+        </div>
+        <div class="hd-collapsible-body" id="hdInspector" style="display:none;"></div>
+      </div>
+
       ${jvmVer || osName ? `<div class="hd-section">
         <div class="hd-section-title">${escapeHtml(t("heapdump.section_env"))}</div>
         <div class="hd-section-body">
@@ -805,6 +814,17 @@ export function renderHeapdumpReportInto(container, report, options = {}) {
   renderClassesInto(document.getElementById("hdClasses"), report.id);
   renderThreadsInto(document.getElementById("hdThreads"), report.id);
   _threadsLoaded.add(report.id);
+
+  document.getElementById("hdInspectorHead")?.addEventListener("click", () => {
+    const wrap = document.getElementById("hdInspectorWrap");
+    const body = document.getElementById("hdInspector");
+    if (!wrap || !body) return;
+    const collapsed = body.style.display === "none";
+    body.style.display = collapsed ? "" : "none";
+    const arrow = wrap.querySelector(".arrow");
+    if (arrow) arrow.textContent = collapsed ? "▾" : "▸";
+    if (collapsed) renderInspectorSection(body, report.id);
+  });
 }
 
 function renderHeapdumpReport(report, opts = {}) {

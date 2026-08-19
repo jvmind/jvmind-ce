@@ -372,6 +372,106 @@ async def proxy_object(
     return data
 
 
+@router.get("/api/heapdump-reports/{report_id}/array-elements")
+async def proxy_array_elements(
+    request: Request, report_id: str,
+    id: int = Query(..., description="Object[] array objectId"),
+    top: int = Query(25, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+):
+    """Object[] 数组元素列表（分页）。Inspector 对 kind=objectArray 展示前
+    top 个元素 + load-more。"""
+    user_id, r = _prep(request, report_id)
+    _quota_check(user_id)
+    params = {"dumpDir": r["dump_dir"], "id": id, "top": top, "offset": offset}
+    status_code, data = await _do("GET", "/array-elements", params=params, timeout=_TIMEOUTS["histogram"])
+    _quota_incr(user_id)
+    return data
+
+
+@router.get("/api/heapdump-reports/{report_id}/collection-entries")
+async def proxy_collection_entries(
+    request: Request, report_id: str,
+    id: int = Query(..., description="Map/Collection instance objectId"),
+    top: int = Query(25, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+):
+    """Map / Collection 实例条目（分页）。Inspector 对 hasCollection 对象展示
+    前 top 个 entry/element + load-more。"""
+    user_id, r = _prep(request, report_id)
+    _quota_check(user_id)
+    params = {"dumpDir": r["dump_dir"], "id": id, "top": top, "offset": offset}
+    status_code, data = await _do("GET", "/collection-entries", params=params, timeout=_TIMEOUTS["histogram"])
+    _quota_incr(user_id)
+    return data
+
+
+@router.post("/api/heapdump-reports/{report_id}/list-objects")
+async def proxy_list_objects(request: Request, report_id: str):
+    """支配树右键 'List objects → outgoing/incoming references'。
+
+    收集目标对象的出/入引用对象 id，Java 端存入 resultSetCache 并返回
+    resultSetId。前端随后用 GET /histogram?objectSet=rs-xxx 拉按类聚合视图。
+    """
+    user_id, r = _prep(request, report_id)
+    _quota_check(user_id)
+    try:
+        raw = (await request.body()).decode("utf-8") or "{}"
+        body = json.loads(raw)
+    except Exception:
+        raise HTTPException(400, "请求体必须是 JSON / Request body must be JSON")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "请求体必须是 JSON 对象 / Request body must be a JSON object")
+    direction = body.get("direction")
+    object_id = body.get("objectId")
+    if direction not in ("out", "in"):
+        raise HTTPException(400, "direction 必须为 'out' 或 'in' / 'direction' must be 'out' or 'in'")
+    if not isinstance(object_id, int) or object_id < 0:
+        raise HTTPException(400, "objectId 必须为非负整数 / 'objectId' must be a non-negative integer")
+    params = {"dumpDir": r["dump_dir"]}
+    status_code, data = await _do("POST", "/list-objects", params=params, json_body=body,
+                                  timeout=_TIMEOUTS["histogram"])
+    _quota_incr(user_id)
+    log_audit(request, "report.heapdump.query.list_objects", user_id=user_id,
+              resource=f"heapdump_report:{report_id}")
+    return data
+
+
+@router.post("/api/heapdump-reports/{report_id}/references")
+async def proxy_references(
+    request: Request, report_id: str,
+    top: int = Query(50, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+):
+    """支配树右键 'List objects → with outgoing/incoming references'。
+
+    直接返回目标对象的出/入引用对象详细行（objectId / label / className /
+    fieldName / shallow / retained），供前端 References 视图渲染。
+    """
+    user_id, r = _prep(request, report_id)
+    _quota_check(user_id)
+    try:
+        raw = (await request.body()).decode("utf-8") or "{}"
+        body = json.loads(raw)
+    except Exception:
+        raise HTTPException(400, "请求体必须是 JSON / Request body must be JSON")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "请求体必须是 JSON 对象 / Request body must be a JSON object")
+    direction = body.get("direction")
+    object_id = body.get("objectId")
+    if direction not in ("out", "in"):
+        raise HTTPException(400, "direction 必须为 'out' 或 'in' / 'direction' must be 'out' or 'in'")
+    if not isinstance(object_id, int) or object_id < 0:
+        raise HTTPException(400, "objectId 必须为非负整数 / 'objectId' must be a non-negative integer")
+    params = {"dumpDir": r["dump_dir"], "top": top, "offset": offset}
+    status_code, data = await _do("POST", "/references", params=params, json_body=body,
+                                  timeout=_TIMEOUTS["histogram"])
+    _quota_incr(user_id)
+    log_audit(request, "report.heapdump.query.references", user_id=user_id,
+              resource=f"heapdump_report:{report_id}")
+    return data
+
+
 @router.get("/api/heapdump-reports/{report_id}/path2gc")
 async def proxy_path2gc(
     request: Request, report_id: str,
