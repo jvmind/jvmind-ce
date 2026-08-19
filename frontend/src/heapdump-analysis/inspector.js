@@ -185,6 +185,7 @@ function buildCrumbs(s, parent) {
 
 // ---------- 对象 Inspector ----------
 
+/** 复用入口：在给定 container 的 [data-obj="panel"] 内渲染对象详情（两栏区块用）。 */
 async function inspect(container, rid, objectId, opts = {}) {
   const s = st(rid);
   const panel = container.querySelector('[data-obj="panel"]');
@@ -195,7 +196,20 @@ async function inspect(container, rid, objectId, opts = {}) {
   s.objectId = objectId;
   const backBtn = container.querySelector('[data-act="back"]');
   if (backBtn) backBtn.disabled = !(s.objectHistory.length > 0);
+  await _renderObjectDetail(panel, rid, objectId, s.dir, (id) => inspect(container, rid, id));
+}
 
+/** 独立入口：把对象详情直接渲染进 container（MAT 工作台左侧 Inspector 用），
+ *  引用导航在同一 container 内跳转。dir 为初始引用方向；onNavigate 可选，
+ *  用于在导航到新对象时让调用方跟踪历史（back/forward）。 */
+export async function renderObjectDetail(container, rid, objectId, dir = "out", onNavigate) {
+  const nav = onNavigate || ((id) => renderObjectDetail(container, rid, id, dir));
+  await _renderObjectDetail(container, rid, objectId, dir, nav);
+}
+
+async function _renderObjectDetail(panel, rid, objectId, dir, onOpen) {
+  if (!panel) return;
+  let currentDir = dir;
   panel.innerHTML = `<div class="hd-progress-inline"><span class="spin"></span>…</div>`;
   let obj;
   try {
@@ -224,10 +238,10 @@ async function inspect(container, rid, objectId, opts = {}) {
   }
 
   if (obj.fields && obj.fields.length) {
-    html += fieldTable(t("heapdump.insp_fields"), obj.fields, container, rid);
+    html += fieldTable(t("heapdump.insp_fields"), obj.fields);
   }
   if (obj.staticFields && obj.staticFields.length) {
-    html += fieldTable(t("heapdump.insp_static_fields"), obj.staticFields, container, rid);
+    html += fieldTable(t("heapdump.insp_static_fields"), obj.staticFields);
   }
 
   // 数组元素 / 容器条目
@@ -248,8 +262,8 @@ async function inspect(container, rid, objectId, opts = {}) {
   // 引用
   html += `<div class="insp-block"><div class="insp-block-title">${escAttr(t("heapdump.insp_references"))}</div>
     <div class="insp-ref-toolbar">
-      <button class="insp-btn small ${s.dir === "out" ? "active" : ""}" data-ref="out">${escAttr(t("heapdump.insp_ref_out"))}</button>
-      <button class="insp-btn small ${s.dir === "in" ? "active" : ""}" data-ref="in">${escAttr(t("heapdump.insp_ref_in"))}</button>
+      <button class="insp-btn small ${currentDir === "out" ? "active" : ""}" data-ref="out">${escAttr(t("heapdump.insp_ref_out"))}</button>
+      <button class="insp-btn small ${currentDir === "in" ? "active" : ""}" data-ref="in">${escAttr(t("heapdump.insp_ref_in"))}</button>
     </div>
     <div data-ref="body"></div></div>`;
 
@@ -257,25 +271,25 @@ async function inspect(container, rid, objectId, opts = {}) {
 
   panel.querySelectorAll("[data-ref]").forEach((b) => {
     b.addEventListener("click", async () => {
-      s.dir = b.dataset.ref;
+      currentDir = b.dataset.ref;
       panel.querySelectorAll("[data-ref]").forEach((x) => x.classList.toggle("active", x === b));
-      await renderReferencesBody(panel, container, rid, objectId, s.dir);
+      await renderReferencesBody(panel, rid, objectId, currentDir, onOpen);
     });
   });
 
   // 字段中的引用 → 点开新对象
-  bindFieldRefs(panel, container, rid);
+  bindFieldRefs(panel, onOpen);
 
   // 数组元素 / 容器条目懒加载
   const arrBody = panel.querySelector('[data-arr="body"]');
-  if (arrBody) await renderArrayElements(panel, container, rid, objectId, 0);
+  if (arrBody) await renderArrayElements(panel, rid, objectId, 0, onOpen);
   const collBody = panel.querySelector('[data-coll="body"]');
-  if (collBody) await renderCollectionEntries(panel, container, rid, objectId, 0);
+  if (collBody) await renderCollectionEntries(panel, rid, objectId, 0, onOpen);
 
-  await renderReferencesBody(panel, container, rid, objectId, s.dir);
+  await renderReferencesBody(panel, rid, objectId, currentDir, onOpen);
 }
 
-function fieldTable(title, fields, container, rid) {
+function fieldTable(title, fields) {
   let html = `<div class="insp-block"><div class="insp-block-title">${escAttr(title)}</div>
     <table class="hd-table insp-field-table"><thead><tr>
       <th>${escAttr(t("heapdump.insp_col_field"))}</th>
@@ -297,18 +311,18 @@ function fieldTable(title, fields, container, rid) {
   return html;
 }
 
-function bindFieldRefs(panel, container, rid) {
+function bindFieldRefs(panel, onOpen) {
   panel.querySelectorAll("a.insp-ref[data-refid]").forEach((a) => {
     a.addEventListener("click", async () => {
       const id = parseInt(a.dataset.refid, 10);
-      if (Number.isInteger(id) && id >= 0) await inspect(container, rid, id);
+      if (Number.isInteger(id) && id >= 0) await onOpen(id);
     });
   });
 }
 
 // ---------- 数组元素（load-more） ----------
 
-async function renderArrayElements(panel, container, rid, objectId, offset) {
+async function renderArrayElements(panel, rid, objectId, offset, onOpen) {
   const body = panel.querySelector('[data-arr="body"]');
   if (!body) return;
   const key = `arr-${objectId}-${offset}`;
@@ -318,11 +332,12 @@ async function renderArrayElements(panel, container, rid, objectId, offset) {
     const data = await api(`/api/heapdump-reports/${encodeURIComponent(rid)}/array-elements?id=${objectId}&top=${PAGE}&offset=${offset}`);
     if (body.dataset.key !== key) return;
     const rows = data.rows || [];
-    const html = arrayTableHtml(rows, container, rid, (tgt) => inspect(container, rid, tgt));
+    const html = arrayTableHtml(rows, onOpen);
     const more = data.cursor ? `<button class="insp-btn small" data-more>${escAttr(t("heapdump.insp_load_more"))}</button>` : "";
     body.innerHTML = html + (more ? `<div class="insp-more">${more}</div>` : "");
+    bindFieldRefs(body, onOpen);
     body.querySelector("[data-more]")?.addEventListener("click", async () => {
-      await renderArrayElements(panel, container, rid, objectId, offset + PAGE);
+      await renderArrayElements(panel, rid, objectId, offset + PAGE, onOpen);
     });
   } catch (e) {
     if (body.dataset.key === key) body.innerHTML = `<div class="hd-error-inline">${escAttr(e.message)}</div>`;
@@ -331,7 +346,7 @@ async function renderArrayElements(panel, container, rid, objectId, offset) {
 
 // ---------- 容器条目（load-more） ----------
 
-async function renderCollectionEntries(panel, container, rid, objectId, offset) {
+async function renderCollectionEntries(panel, rid, objectId, offset, onOpen) {
   const body = panel.querySelector('[data-coll="body"]');
   if (!body) return;
   const key = `coll-${objectId}-${offset}`;
@@ -341,7 +356,7 @@ async function renderCollectionEntries(panel, container, rid, objectId, offset) 
     const data = await api(`/api/heapdump-reports/${encodeURIComponent(rid)}/collection-entries?id=${objectId}&top=${PAGE}&offset=${offset}`);
     if (body.dataset.key !== key) return;
     const rows = data.rows || [];
-    const open = (id) => inspect(container, rid, id);
+    const open = (id) => onOpen(id);
     let html = "";
     if (data.kind === "map-entries") {
       html = `<table class="hd-table insp-ref-table"><thead><tr>
@@ -352,36 +367,29 @@ async function renderCollectionEntries(panel, container, rid, objectId, offset) 
         return `<tr><td>${cell(r.key)}</td><td>${cell(r.value)}</td></tr>`;
       }).join("") + `</tbody></table>`;
     } else {
-      html = arrayTableHtml(rows, container, rid, open);
+      html = arrayTableHtml(rows, open);
     }
     const more = data.cursor ? `<button class="insp-btn small" data-more>${escAttr(t("heapdump.insp_load_more"))}</button>` : "";
     body.innerHTML = html + (more ? `<div class="insp-more">${more}</div>` : "");
-    body.querySelectorAll("a.insp-ref[data-refid]").forEach((a) => {
-      a.addEventListener("click", async () => {
-        const id = parseInt(a.dataset.refid, 10);
-        if (Number.isInteger(id) && id >= 0) open(id);
-      });
-    });
+    bindFieldRefs(body, open);
     body.querySelector("[data-more]")?.addEventListener("click", async () => {
-      await renderCollectionEntries(panel, container, rid, objectId, offset + PAGE);
+      await renderCollectionEntries(panel, rid, objectId, offset + PAGE, onOpen);
     });
   } catch (e) {
     if (body.dataset.key === key) body.innerHTML = `<div class="hd-error-inline">${escAttr(e.message)}</div>`;
   }
 }
 
-function arrayTableHtml(rows, container, rid, open) {
+function arrayTableHtml(rows, open) {
   const bodyRows = rows.map((r) => {
     const label = r.isNull
       ? `<span class="insp-hint">null</span>`
       : `<a class="insp-ref" href="javascript:void(0)" data-refid="${escAttr(r.objectId)}" title="${escAttr(r.className || "")}">${escAttr(r.label || "#" + r.objectId)}</a>`;
     return `<tr><td>${label}</td><td class="insp-ftype">${escAttr(r.className || "")}</td></tr>`;
   }).join("");
-  const wrap = `<table class="hd-table insp-ref-table"><thead><tr>
+  return `<table class="hd-table insp-ref-table"><thead><tr>
     <th>${escAttr(t("heapdump.insp_col_object"))}</th><th>${escAttr(t("heapdump.insp_col_type"))}</th>
   </tr></thead><tbody>${bodyRows}</tbody></table>`;
-  // 给行内引用绑定点击（延迟到 DOM 插入后由调用方绑定也行，这里直接注入脚本绑定）
-  return wrap;
 }
 
 // ---------- 引用视图 ----------
@@ -393,11 +401,11 @@ async function renderReferences(container, rid) {
     if (objPanel) objPanel.innerHTML = `<div class="insp-hint">${escAttr(t("heapdump.insp_ref_noselect"))}</div>`;
     return;
   }
-  await renderReferencesBody(objPanel, container, rid, s.objectId, s.dir);
+  await renderReferencesBody(objPanel, rid, s.objectId, s.dir, (id) => inspect(container, rid, id));
 }
 
-async function renderReferencesBody(panel, container, rid, objectId, direction) {
-  const body = panel ? panel.querySelector('[data-ref="body"]') : container.querySelector('[data-ref="body"]');
+async function renderReferencesBody(panel, rid, objectId, direction, onOpen) {
+  const body = panel.querySelector('[data-ref="body"]');
   if (!body) return;
   body.innerHTML = `<div class="hd-progress-inline"><span class="spin"></span>…</div>`;
   try {
@@ -426,12 +434,7 @@ async function renderReferencesBody(panel, container, rid, objectId, direction) 
         <td class="num">${escAttr(fmtBytes(r.retainedBytes))}</td>
       </tr>`;
     }).join("") + `</tbody></table>`;
-    body.querySelectorAll("a.insp-ref[data-refid]").forEach((a) => {
-      a.addEventListener("click", async () => {
-        const id = parseInt(a.dataset.refid, 10);
-        if (Number.isInteger(id) && id >= 0) await inspect(container, rid, id);
-      });
-    });
+    bindFieldRefs(body, onOpen);
   } catch (e) {
     body.innerHTML = `<div class="hd-error-inline">${escAttr(e.message)}</div>`;
   }

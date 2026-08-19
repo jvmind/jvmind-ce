@@ -527,18 +527,19 @@
 /* 打开 MAT 分析界面的链接按钮 */
 .hd-open-mat {
   display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:600;
-  padding:6px 12px; border-radius:5px; text-decoration:none; flex-shrink:0;
-  color:var(--accent,#4a9eff); background:rgba(74,158,255,.12);
-  border:1px solid rgba(74,158,255,.4);
+  padding:6px 12px; border-radius:var(--radius-md, 8px); text-decoration:none; flex-shrink:0;
+  color:#fff; background:var(--accent,#6366f1); border:1px solid var(--accent,#6366f1);
+  transition:filter .15s ease;
 }
-.hd-open-mat:hover { background:rgba(74,158,255,.22); }
+.hd-open-mat:hover { filter:brightness(1.08); }
+.hd-open-mat svg { width:13px; height:13px; }
 
-/* ---------- MAT 工作台（全屏 /mat/{rid}） ---------- */
+/* ---------- MAT 工作台（全屏 /mat/{rid}，react_agent_project 风格） ---------- */
 .mat-page { margin:0; height:100vh; overflow:hidden; background:var(--bg,#0e1116); color:var(--text,#e6edf3); font-family:system-ui,sans-serif; }
-.mat-app { display:flex; flex-direction:column; height:100vh; }
+.mat-app { display:grid; grid-template-rows:auto 1fr; height:100vh; width:100%; min-width:0; }
 .mat-toolbar {
   display:flex; align-items:center; gap:12px; padding:8px 14px;
-  background:var(--bg-2,#161b22); border-bottom:1px solid var(--border,#2a313c); flex-shrink:0;
+  background:var(--bg-2,#161b22); border-bottom:1px solid var(--border,#2a313c);
 }
 .mat-brand { display:flex; align-items:center; gap:6px; font-weight:700; font-size:14px; color:var(--accent,#6366f1); }
 .mat-brand svg { width:16px; height:16px; }
@@ -547,55 +548,83 @@
   background:var(--bg-3,#1c222b); border:1px solid var(--border,#2a313c); border-radius:6px;
   color:var(--text-dim,#8b949e); max-width:60%; overflow:hidden;
 }
-.mat-rid { font-family:monospace; color:var(--text,#e6edf3); }
+.mat-rid { font-family:var(--mono,monospace); color:var(--text,#e6edf3); }
 .mat-sep { color:var(--text-dim); }
-.mat-filename { font-family:monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mat-filename { font-family:var(--mono,monospace); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .mat-spacer { flex:1; }
 .mat-btn {
   display:inline-flex; align-items:center; gap:5px; font-size:12px; padding:5px 10px;
   border:1px solid var(--border,#2a313c); background:var(--bg-3,#1c222b); color:var(--text,#e6edf3);
-  border-radius:5px; cursor:pointer;
+  border-radius:var(--radius-md,6px); cursor:pointer;
 }
-.mat-btn:hover { background:var(--bg-3,#1c222b); filter:brightness(1.1); }
+.mat-btn:hover { filter:brightness(1.1); }
 .mat-btn svg { width:13px; height:13px; }
 .mat-btn-primary {
   display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:600; padding:5px 12px;
   border:1px solid var(--accent,#6366f1); background:var(--accent,#6366f1); color:#fff;
-  border-radius:5px; cursor:pointer;
+  border-radius:var(--radius-md,6px); cursor:pointer;
 }
+.mat-btn-primary:hover { filter:brightness(1.08); }
 .mat-btn-primary svg { width:13px; height:13px; }
-.mat-body { flex:1; display:flex; min-height:0; }
-.mat-views { flex:1; display:flex; flex-direction:column; min-width:0; }
-.mat-tabs { display:flex; gap:2px; padding:6px 10px 0; background:var(--bg-2,#161b22); border-bottom:1px solid var(--border,#2a313c); }
-.mat-tab {
-  font-size:12px; padding:6px 12px; border:1px solid transparent; border-bottom:none;
-  background:transparent; color:var(--text-dim,#8b949e); cursor:pointer; border-radius:5px 5px 0 0;
+
+.mat-layout { display:flex; min-height:0; min-width:0; overflow:hidden; }
+.mat-inspector-wrap {
+  width:340px; min-width:260px; max-width:60vw; background:var(--bg-2,#161b22);
+  border-right:1px solid var(--border,#2a313c); display:flex; flex-direction:column; min-height:0;
 }
+.mat-insp-head { display:flex; align-items:center; gap:6px; padding:6px 10px; border-bottom:1px solid var(--border,#2a313c); flex-shrink:0; }
+.mat-insp-title { margin:0; font-size:12px; font-weight:600; color:var(--text-dim,#8b949e); }
+.mat-insp-spacer { flex:1; }
+.mat-nav-btn {
+  display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px;
+  border:1px solid var(--border,#2a313c); background:var(--bg-3,#1c222b); color:var(--text,#e6edf3);
+  border-radius:4px; cursor:pointer; padding:0;
+}
+.mat-nav-btn svg { width:12px; height:12px; }
+.mat-nav-btn:disabled { opacity:.35; cursor:default; }
+.mat-insp-open { display:flex; gap:6px; padding:6px 10px; border-bottom:1px solid var(--border,#2a313c); flex-shrink:0; }
+.mat-insp-open input { flex:1; font-size:11px; padding:3px 6px; border:1px solid var(--border,#2a313c); border-radius:4px; background:var(--bg,#0e1116); color:var(--text,#e6edf3); }
+.mat-insp-body { flex:1; overflow:auto; padding:10px; min-height:0; }
+.mat-insp-body .insp-block-title { color:var(--text-dim,#8b949e); }
+.mat-insp-body .insp-obj-label { font-size:13px; }
+.mat-resize { width:4px; cursor:col-resize; background:var(--border,#2a313c); flex-shrink:0; }
+.mat-resize:hover { background:var(--accent,#6366f1); }
+
+.mat-center { flex:1; display:flex; flex-direction:column; min-width:0; min-height:0; }
+.mat-tabbar { display:flex; gap:2px; padding:6px 10px 0; background:var(--bg-2,#161b22); border-bottom:1px solid var(--border,#2a313c); overflow-x:auto; flex-shrink:0; }
+.mat-tab {
+  display:inline-flex; align-items:center; gap:5px; font-size:12px; padding:6px 11px;
+  border:1px solid transparent; border-bottom:none; background:transparent; color:var(--text-dim,#8b949e);
+  cursor:pointer; border-radius:5px 5px 0 0; white-space:nowrap;
+}
+.mat-tab svg { width:13px; height:13px; }
 .mat-tab:hover { color:var(--text,#e6edf3); }
 .mat-tab.active { color:var(--accent,#6366f1); background:var(--bg,#0e1116); border-color:var(--border,#2a313c); font-weight:600; }
-.mat-view { flex:1; overflow:auto; padding:12px; }
-.mat-inspector {
-  width:46%; min-width:360px; max-width:720px; border-left:1px solid var(--border,#2a313c);
-  background:var(--bg,#0e1116); overflow:auto;
-}
-.mat-inspector .insp-layout { grid-template-columns:minmax(280px,42%) 1fr; }
+.mat-view { flex:1; overflow:auto; padding:12px; min-height:0; }
+
 .mat-hint { font-size:12px; color:var(--text-dim,#8b949e); padding:14px 0; }
 .mat-error { font-size:12px; color:var(--red,#f85149); padding:14px 0; }
+.mat-empty { padding:40px; text-align:center; color:var(--text-dim,#8b949e); font-size:12px; }
 .mat-table-wrap { overflow:auto; }
 .mat-table { width:100%; border-collapse:collapse; font-size:12px; }
 .mat-table th { text-align:left; color:var(--text-dim,#8b949e); font-weight:600; padding:6px 8px; border-bottom:1px solid var(--border,#2a313c); position:sticky; top:0; background:var(--bg,#0e1116); }
 .mat-table td { padding:5px 8px; border-bottom:1px solid var(--border,#2a313c); }
 .mat-table tr:hover td { background:var(--bg-2,#161b22); }
-.mat-table .num { text-align:right; font-family:monospace; }
-.mat-table .mono { font-family:monospace; }
+.mat-table .num { text-align:right; font-family:var(--mono,monospace); }
+.mat-table .mono { font-family:var(--mono,monospace); }
+.mat-table .mat-dim, .mat-k { color:var(--text-dim,#8b949e); white-space:nowrap; }
+.mat-kv .mat-v { font-family:var(--mono,monospace); }
+.mat-dom-crumb { font-size:11px; color:var(--text-dim,#8b949e); margin-bottom:6px; }
+.mat-crumb { color:var(--accent,#6366f1); cursor:pointer; }
+.mat-crumb-cur { color:var(--text,#e6edf3); }
+.mat-dom-count { color:var(--text-dim,#8b949e); }
+.mat-dom-exp { display:inline-block; width:16px; border:0; background:none; color:var(--accent,#6366f1); cursor:pointer; font-size:12px; }
 .mat-oql { display:flex; flex-direction:column; gap:8px; }
 .mat-oql textarea {
-  font-family:monospace; font-size:12px; padding:8px; border:1px solid var(--border,#2a313c);
+  font-family:var(--mono,monospace); font-size:12px; padding:8px; border:1px solid var(--border,#2a313c);
   background:var(--bg-2,#161b22); color:var(--text,#e6edf3); border-radius:5px; resize:vertical;
 }
 .mat-oql-actions { display:flex; }
 .mat-leak { padding:8px; margin-bottom:6px; border:1px solid var(--border,#2a313c); border-left:3px solid var(--red,#f85149); border-radius:5px; background:var(--bg-2,#161b22); }
 .mat-leak-name { font-size:12px; font-weight:600; }
 .mat-leak-meta { font-size:11px; color:var(--text-dim,#8b949e); margin-top:3px; }
-.mat-empty { padding:40px; text-align:center; color:var(--text-dim,#8b949e); }
-@media (max-width: 900px) { .mat-body { flex-direction:column; } .mat-inspector { width:auto; max-width:none; border-left:none; border-top:1px solid var(--border,#2a313c); } }
