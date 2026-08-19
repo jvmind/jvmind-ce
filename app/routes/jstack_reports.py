@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid as _uuid
@@ -64,8 +65,11 @@ async def upload_jstack(request: Request, sid: str, file: UploadFile = File(...)
     helpers._cleanup_expired_uploads()
 
     try:
-        parsed = parse_jstack(text)
-        stats = jstack_compute_stats(parsed)
+        def _parse_and_stats(text: str):
+            parsed = parse_jstack(text)
+            return jstack_compute_stats(parsed)
+        # 解析 + 统计是纯 CPU 工作，丢到线程池避免阻塞事件循环。
+        stats = await asyncio.to_thread(_parse_and_stats, text)
     except Exception as e:
         raise HTTPException(400, f"jstack 解析失败: {e} / jstack parse failed: {e}")
 
@@ -90,7 +94,7 @@ async def upload_jstack(request: Request, sid: str, file: UploadFile = File(...)
     if state._USE_DATABASE:
         try:
             from react_agent.models import UploadedFileModel
-            meta = save_uploaded_text(user_id, file_id, "jstack", text)
+            meta = await asyncio.to_thread(save_uploaded_text, user_id, file_id, "jstack", text)
             db = um.db
             db.add(UploadedFileModel(
                 file_id=file_id, user_id=user_id, content_type="jstack", content="",

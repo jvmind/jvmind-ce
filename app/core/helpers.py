@@ -178,13 +178,27 @@ def _try_consume_llm_call(user_id: str, lang: str = "") -> tuple:
 
 
 def _check_llm_ready(user_id: str, lang: str = "") -> Optional[str]:
+    """Return an error message if chat cannot run, else None.
+
+    Built-in model (FREE_TIER_API_KEY) and local keyless endpoints (Ollama)
+    are both valid — only genuinely missing credentials are rejected.
+    """
     cfg_src, err = _get_llm_config_source(user_id)
     if err:
         return err
-    if not cfg_src.get("openai_api_key", ""):
-        from react_agent.i18n import _b
-        return _b("请先在 ⚙️ 配置中填写你的 API Key", "Please configure your API Key in ⚙️ Settings first", lang)
-    return None
+    use_builtin = bool(cfg_src.get("use_built_in", True)) if cfg_src else True
+    if use_builtin:
+        builtin = get_builtin_config()
+        if builtin.get("openai_api_key"):
+            return None
+    elif cfg_src.get("openai_api_key", ""):
+        return None
+    else:
+        base_url = str(cfg_src.get("openai_base_url") or "")
+        if any(h in base_url.lower() for h in ("localhost", "127.0.0.1")):
+            return None
+    from react_agent.i18n import _b
+    return _b("请先在 ⚙️ 配置中填写你的 API Key", "Please configure your API Key in ⚙️ Settings first", lang)
 
 
 def _check_chat_rate(user_id: str, lang: str = "") -> None:
@@ -193,13 +207,17 @@ def _check_chat_rate(user_id: str, lang: str = "") -> None:
 
 # ---- 会话锁 ----
 
+# Each entry is [lock, refcount, holder_thread]. The holder_thread is the
+# thread that currently owns the lock (used to detect stale locks from
+# crashed streams without ever force-releasing a live holder's lock).
+
 def _get_session_lock(session_id: str) -> threading.Lock:
     with state._SESSION_LOCKS_GUARD:
         entry = state._SESSION_LOCKS.get(session_id)
         if entry is None:
             if len(state._SESSION_LOCKS) >= state._SESSION_LOCKS_MAX:
                 _reclaim_idle_session_locks(exclude=session_id)
-            entry = [threading.Lock(), 0]
+            entry = [threading.Lock(), 0, None]
             state._SESSION_LOCKS[session_id] = entry
         entry[1] += 1
         return entry[0]
@@ -208,20 +226,62 @@ def _get_session_lock(session_id: str) -> threading.Lock:
 def _release_session_lock(session_id: str) -> None:
     with state._SESSION_LOCKS_GUARD:
         entry = state._SESSION_LOCKS.get(session_id)
-        if entry is not None and entry[1] > 0:
-            entry[1] -= 1
+        if entry is not None:
+            if entry[1] > 0:
+                entry[1] -= 1
+            if entry[2] is threading.current_thread():
+                entry[2] = None
 
 
-def _force_release_session_lock(session_id: str) -> None:
-    """Force-release a session lock (e.g. stale lock from a crashed stream)."""
+def _acquire_session_lock(session_id: str) -> Optional[threading.Lock]:
+    """Try to acquire the per-session lock without blocking.
+
+    Returns the lock on success (caller must pair ``lock.release()`` with
+    ``_release_session_lock``), or None when the session is busy. If the
+    previous holder's thread is gone (stale lock from a crashed stream) the
+    lock is reclaimed and one retry is attempted. A lock held by a live
+    thread is never stolen — the caller should return 409 instead.
+    """
     with state._SESSION_LOCKS_GUARD:
         entry = state._SESSION_LOCKS.get(session_id)
-        if entry is not None and entry[1] > 0:
-            try:
-                entry[0].release()
-            except RuntimeError:
-                pass
-            del state._SESSION_LOCKS[session_id]
+        if entry is None:
+            if len(state._SESSION_LOCKS) >= state._SESSION_LOCKS_MAX:
+                _reclaim_idle_session_locks(exclude=session_id)
+            entry = [threading.Lock(), 0, None]
+            state._SESSION_LOCKS[session_id] = entry
+        entry[1] += 1
+        lock = entry[0]
+    if lock.acquire(blocking=False):
+        with state._SESSION_LOCKS_GUARD:
+            entry = state._SESSION_LOCKS.get(session_id)
+            if entry is not None:
+                entry[2] = threading.current_thread()
+        return lock
+    holder = None
+    with state._SESSION_LOCKS_GUARD:
+        entry = state._SESSION_LOCKS.get(session_id)
+        if entry is not None:
+            holder = entry[2]
+    if holder is not None and not holder.is_alive():
+        # Stale lock: the owning thread is gone. Reclaim and retry once.
+        try:
+            lock.release()
+        except RuntimeError:
+            pass
+        with state._SESSION_LOCKS_GUARD:
+            entry = state._SESSION_LOCKS.get(session_id)
+            if entry is not None:
+                entry[2] = None
+                entry[1] = 0
+        if lock.acquire(blocking=False):
+            with state._SESSION_LOCKS_GUARD:
+                entry = state._SESSION_LOCKS.get(session_id)
+                if entry is not None:
+                    entry[2] = threading.current_thread()
+                    entry[1] = 1
+            return lock
+    _release_session_lock(session_id)
+    return None
 
 
 def _reclaim_idle_session_locks(exclude: str = "") -> int:
@@ -314,6 +374,15 @@ def _get_agent(user_id: str):
         if user_id not in state._AGENTS:
             state._AGENTS[user_id] = _build_agent(user_id)
         return state._AGENTS[user_id]
+
+
+def _invalidate_agent(user_id: str) -> None:
+    """Drop a cached agent under the lock so concurrent readers never see a
+    missing key between the existence check and the read (same invariant as
+    ``_get_agent``). Used by skills/config mutation routes."""
+    with state._AGENTS_LOCK:
+        if user_id in state._AGENTS:
+            del state._AGENTS[user_id]
 
 
 def _get_llm_config_source(user_id: str):
@@ -446,15 +515,19 @@ def _load_uploaded_from_db():
 # ---- 取消/中断标志 ----
 
 def set_cancel_flag(session_id: str) -> None:
-    pass
+    """请求停止某个会话的进行中生成。SSE 适配器在 chunk 间检查并尽快停流。"""
+    with state._CANCEL_FLAGS_GUARD:
+        state._CANCEL_FLAGS[session_id] = True
 
 
 def is_cancelled(session_id: str) -> bool:
-    return False
+    with state._CANCEL_FLAGS_GUARD:
+        return bool(state._CANCEL_FLAGS.get(session_id, False))
 
 
 def clear_cancel_flag(session_id: str) -> None:
-    pass
+    with state._CANCEL_FLAGS_GUARD:
+        state._CANCEL_FLAGS.pop(session_id, None)
 
 
 # ---- 暴露给其他模块 ----
@@ -467,8 +540,8 @@ __all__ = [
     "_check_org_member", "_get_org_owner_config",
     "_get_user_plan", "_can_make_llm_call", "_increment_metered_llm_call",
     "_try_consume_llm_call", "_check_llm_ready", "_check_chat_rate",
-    "_get_session_lock", "_release_session_lock", "_force_release_session_lock",
-    "get_builtin_config", "_get_agent", "_get_llm_config_source",
+    "_get_session_lock", "_release_session_lock", "_acquire_session_lock",
+    "get_builtin_config", "_get_agent", "_invalidate_agent", "_get_llm_config_source",
     "_uses_builtin_model", "_DEMO_SCOPE_PROMPT",
     "_delete_uploaded_file_record", "_read_upload_bounded",
     "_get_upload_retention_days", "_cleanup_expired_uploads", "_load_uploaded_from_db",

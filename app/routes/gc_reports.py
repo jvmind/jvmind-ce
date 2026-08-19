@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
@@ -92,7 +93,9 @@ async def upload_gc_log(request: Request, sid: str, file: UploadFile = File(...)
     helpers._cleanup_expired_uploads()
 
     try:
-        stats = gc_analyze(text)
+        # GC 解析是纯 CPU 的正则/状态机扫描，GB 级日志可能耗时数秒到数分钟。
+        # 丢到线程池执行，避免阻塞事件循环（否则所有并发请求 / SSE 都会冻结）。
+        stats = await asyncio.to_thread(gc_analyze, text)
     except Exception as e:
         raise HTTPException(400, f"GC 日志解析失败: {e} / GC log parse failed: {e}")
 
@@ -190,7 +193,7 @@ async def upload_gc_log(request: Request, sid: str, file: UploadFile = File(...)
     if state._USE_DATABASE:
         try:
             from react_agent.models import UploadedFileModel
-            meta = save_uploaded_text(user_id, file_id, "gc", text)
+            meta = await asyncio.to_thread(save_uploaded_text, user_id, file_id, "gc", text)
             db = um.db
             db.add(UploadedFileModel(
                 file_id=file_id, user_id=user_id, content_type="gc", content="",

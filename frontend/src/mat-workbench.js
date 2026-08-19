@@ -37,7 +37,7 @@ const CORE_TABS = [
   { id: "histogram",  icon: "bar-chart-3",      labelKey: "mat.tab_histogram" },
   { id: "dominator",  icon: "git-fork",         labelKey: "mat.tab_dominator" },
   { id: "threads",    icon: "layers",           labelKey: "mat.tab_threads" },
-  { id: "leak",       icon: "stethoscope",      labelKey: "mat.tab_leak" },
+  { id: "leak",       icon: "stethoscope",      labelKey: "mat.tab_leaks" },
   { id: "oql",        icon: "search",           labelKey: "mat.tab_oql" },
   { id: "threadlocals", icon: "hash",           labelKey: "mat.tab_threadlocals" },
 ];

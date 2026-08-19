@@ -154,8 +154,8 @@ def _parse_lock(line: str) -> Optional[dict]:
 _STATE_HINT_MAP: Dict[str, str] = {
     "runnable": "RUNNABLE",
     "waiting on condition": "WAITING",
-    "in Object.wait()": "WAITING",
-    "in Object.wait0": "WAITING",
+    "in object.wait()": "WAITING",
+    "in object.wait0": "WAITING",
     "blocked": "BLOCKED",
 }
 
@@ -320,8 +320,15 @@ def _parse_jstack_json(text: str) -> dict:
     (numeric IDs, formatVersion=2).  Numeric values are coerced to str/int
     as needed.
     """
-    raw = _json.loads(text)
+    try:
+        raw = _json.loads(text)
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"invalid JSON thread dump: {e}") from e
+    if not isinstance(raw, dict):
+        raise ValueError("invalid JSON thread dump: root value is not an object")
     td = raw.get("threadDump", {})
+    if not isinstance(td, dict):
+        raise ValueError("invalid JSON thread dump: threadDump is not an object")
     jdk_version = td.get("runtimeVersion", "")
     threads: List[dict] = []
 
@@ -343,7 +350,7 @@ def _parse_jstack_json(text: str) -> dict:
                     name = f"Thread#{tid}"
             state = t.get("state", "UNKNOWN")
 
-            frames = [_parse_json_frame(sf) for sf in t.get("stack", [])]
+            frames = [_parse_json_frame(sf) for sf in (t.get("stack") or [])]
             frames = [f for f in frames if f is not None]
 
             lock_waiting = t.get("waitingOn") or ""
@@ -964,8 +971,15 @@ def _extract_thread_text(text: str, identifier: str) -> Optional[str]:
 
 def _extract_thread_text_json(text: str, identifier: str) -> Optional[str]:
     """从 JSON 格式线程转储中提取指定线程，格式化为可读文本。"""
-    raw = _json.loads(text)
+    try:
+        raw = _json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
     td = raw.get("threadDump", {})
+    if not isinstance(td, dict):
+        return None
 
     target: Optional[dict] = None
     found_tid: Optional[str] = None

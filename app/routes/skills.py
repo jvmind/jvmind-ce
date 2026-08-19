@@ -31,8 +31,7 @@ def create_skill(request: Request, body: dict):
         if f not in body or not body[f].strip():
             raise HTTPException(400, f"缺少必填字段 '{f}'")
     skid = sm.create(body)
-    if user_id in state._AGENTS:
-        del state._AGENTS[user_id]
+    helpers._invalidate_agent(user_id)
     log_audit(request, "skill.create", user_id=user_id, resource=f"skill:{skid}", details={"name": body.get("name", ""), "category": body.get("category", "")})
     return {"id": skid, "ok": True}
 
@@ -54,8 +53,7 @@ def update_skill(request: Request, skid: str, body: dict):
     ok = sm.update(skid, body)
     if not ok:
         raise HTTPException(404, "skill not found")
-    if user_id in state._AGENTS:
-        del state._AGENTS[user_id]
+    helpers._invalidate_agent(user_id)
     log_audit(request, "skill.update", user_id=user_id, resource=f"skill:{skid}", details={"fields": sorted(body.keys()), "name": body.get("name", "")})
     return {"ok": True}
 
@@ -68,8 +66,7 @@ def delete_skill(request: Request, skid: str):
     ok = sm.delete(skid)
     if not ok:
         raise HTTPException(404, "skill not found")
-    if user_id in state._AGENTS:
-        del state._AGENTS[user_id]
+    helpers._invalidate_agent(user_id)
     log_audit(request, "skill.delete", user_id=user_id, resource=f"skill:{skid}", details={"name": (skill or {}).get("name", "")})
     return {"deleted": True}
 

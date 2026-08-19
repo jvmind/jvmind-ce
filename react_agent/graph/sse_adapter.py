@@ -5,6 +5,7 @@ import json
 import logging
 import queue
 import threading
+import time
 
 from typing import Any, Callable, Dict, Generator, List, Optional
 
@@ -95,7 +96,20 @@ class SSEAdapter:
                     {"recursion_limit": recursion_limit},
                     stream_mode=self.stream_mode,
                 ):
-                    chunk_queue.put(item)
+                    # put_nowait + stop_drain check instead of a blocking put:
+                    # a blocking put would deadlock the worker thread when the
+                    # consumer has gone away (client disconnect) and the queue
+                    # fills up — the graph thread never checks stop_drain while
+                    # stuck in put(), leaking the executor thread. Retry briefly
+                    # to tolerate a slow-but-alive client, then give up.
+                    while True:
+                        try:
+                            chunk_queue.put_nowait(item)
+                            break
+                        except queue.Full:
+                            if stop_drain.is_set():
+                                break
+                            time.sleep(0.02)
                     if stop_drain.is_set():
                         break
             except BaseException as e:

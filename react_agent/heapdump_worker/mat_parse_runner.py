@@ -20,6 +20,7 @@ import glob
 import os
 import re
 import shutil
+import signal
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -126,14 +127,27 @@ class TextProgressMapper:
 
 
 def _clean_partial_indexes(dump_dir: str, hprof_name: str) -> None:
-    """中断/失败后清理半成品 index（保留原始 hprof）。"""
-    for f in glob.glob(os.path.join(dump_dir, "*.index")):
+    """中断/失败后清理半成品 index（保留原始 hprof）。
+
+    按 hprof 基名定向清理，避免误删同目录下其他报告或并发 worker 已生成的完整
+    index。MAT 产物命名为 ``<hprof>.<suffix>``（.index/.threads/.domTree 等，
+    含临时后缀），额外兜底清理旧版 MAT 的顶层 *.index 文件。
+    """
+    base = hprof_name  # e.g. app.hprof / app.hprof.gz
+    removed = set()
+    for f in glob.glob(os.path.join(dump_dir, base + ".*")):
+        if os.path.basename(f) == base:
+            continue
         try:
             os.remove(f)
+            removed.add(f)
         except OSError:
             pass
-    for f in glob.glob(os.path.join(dump_dir, "*.threads")) + \
+    for f in glob.glob(os.path.join(dump_dir, "*.index")) + \
+             glob.glob(os.path.join(dump_dir, "*.threads")) + \
              glob.glob(os.path.join(dump_dir, "*.log.index")):
+        if f in removed:
+            continue
         try:
             os.remove(f)
         except OSError:
@@ -172,6 +186,7 @@ async def run_parse_v1(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,   # MAT 进度走 stdout；合并便于逐行读
         cwd=dump_dir,
+        start_new_session=True,             # 独立进程组，便于整组 kill（见 _kill_proc）
     )
 
     mapper = TextProgressMapper()
@@ -190,6 +205,14 @@ async def run_parse_v1(
 
     cancel_task = asyncio.create_task(pump_cancel())
 
+    def _kill_proc() -> None:
+        """Kill the whole process group (MAT + any children). Safe to call repeatedly."""
+        if proc.returncode is None:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+
     try:
         assert proc.stdout is not None
         async for raw in proc.stdout:
@@ -199,9 +222,22 @@ async def run_parse_v1(
                 await on_update(progress, phase or "")
             if message and on_message:
                 await on_message(message)
+    except BaseException:
+        # 包括 asyncio.CancelledError（墙钟超时/优雅停机/任务取消）。先杀进程组，
+        # 再让异常继续传播——绝不让 MAT 子进程在 worker 退出后继续写 index。
+        _kill_proc()
+        raise
     finally:
-        rc = await proc.wait()
         cancel_task.cancel()
+        try:
+            await cancel_task
+        except (BaseException, Exception):
+            pass
+        _kill_proc()
+        try:
+            rc = await proc.wait()
+        except Exception:
+            rc = proc.returncode or -1
 
     hprof_name = os.path.basename(hprof_path)
     if canceled:

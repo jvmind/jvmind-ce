@@ -192,12 +192,10 @@ def chat_stream(request: Request, req: ChatReq):
         return EventSourceResponse(_len_err())
 
     helpers._check_session_owner(req.session_id, user_id)
-    session_lock = helpers._get_session_lock(req.session_id)
-    if not session_lock.acquire(blocking=False):
-        helpers._release_session_lock(req.session_id)
-        helpers._force_release_session_lock(req.session_id)
+    session_lock = helpers._acquire_session_lock(req.session_id)
+    if session_lock is None:
         return JSONResponse(
-            {"detail": "会话锁已强制释放，请重试 / Session lock released, please retry"},
+            {"detail": "该会话正在处理中，请稍候再试 / Session is busy processing, please try again shortly"},
             status_code=409,
         )
 

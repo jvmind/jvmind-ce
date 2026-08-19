@@ -329,6 +329,11 @@ export async function sendMessage(explicitText) {
   let hadStreamError = false;
   let streamErrorText = "";
   let finalMessageId = null;
+  // 流式读取空闲超时：服务端挂死（不响应也不断连）时避免永久 loading。
+  // 后端已有 LLM 超时兜底，这里是客户端最后一层保险（与手动停止共用 AbortController）。
+  // 声明在 try 之前，保证 fetch 阶段就抛错时 catch 分支也能安全引用。
+  let idleTimer = null;
+  let idleTimeoutHit = false;
 
   try {
     const res = await fetch("/api/chat/stream", {
@@ -349,8 +354,19 @@ export async function sendMessage(explicitText) {
     const decoder = new TextDecoder();
     let buf = "";
 
+    const STREAM_IDLE_TIMEOUT = 120000;
+    const armIdle = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        idleTimeoutHit = true;
+        controller.abort();
+      }, STREAM_IDLE_TIMEOUT);
+    };
+    armIdle();
+
     while (true) {
       const { value, done } = await reader.read();
+      clearTimeout(idleTimer);
       if (done) break;
       buf += decoder.decode(value, { stream: true });
 
@@ -363,7 +379,9 @@ export async function sendMessage(explicitText) {
         const ev = parseSSE(raw);
         if (ev) handleEvent(ev);
       }
+      armIdle();
     }
+    clearTimeout(idleTimer);
     buf += decoder.decode();
     if (buf.trim()) {
       const ev = parseSSE(buf);
@@ -447,6 +465,13 @@ export async function sendMessage(explicitText) {
     }
   } catch (e) {
     if (e.name === "AbortError") {
+      if (idleTimeoutHit) {
+        // 服务端挂死（长时间无数据）触发超时中止
+        hadStreamError = true;
+        streamErrorText = t("chat.stream_timeout") || "Stream timed out — no response from server";
+        finalDiv.innerHTML = `<span style="color:var(--red)">${ico('x')} ${escapeHtml(streamErrorText)}</span>`;
+        wrap.dataset.content = streamErrorText;
+      }
       // user clicked stop; content already rendered, just stop
     } else {
       finalDiv.innerHTML = `<span style="color:var(--red)">${ico('x')} ${escapeHtml(e.message)}</span>`;

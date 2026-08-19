@@ -1,12 +1,19 @@
 """LLM factory with reasoning_content support for DeepSeek-style models."""
 from __future__ import annotations
 
+import os
 from typing import Any, Iterator, List, Optional
 
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessageChunk
 from langchain_core.outputs import ChatGenerationChunk
 from langchain_openai import ChatOpenAI
+
+# Per-request timeout in seconds. For streaming requests this acts as an
+# inactivity read timeout: if the provider goes silent (no chunks) for this
+# long, the request is aborted so a hung upstream can never stall the SSE
+# stream indefinitely.
+LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "120"))
 
 
 class _ReasoningOpenAI(ChatOpenAI):
@@ -73,6 +80,7 @@ def build_llm(
     base_url: str,
     model: str,
     temperature: float = 0.3,
+    timeout: Optional[float] = None,
 ) -> _ReasoningOpenAI:
     """Construct a ChatOpenAI instance with reasoning_content support."""
     return _ReasoningOpenAI(
@@ -81,4 +89,5 @@ def build_llm(
         model=model,
         temperature=temperature,
         streaming=True,
+        timeout=timeout if timeout is not None else LLM_TIMEOUT_SECONDS,
     )

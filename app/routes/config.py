@@ -28,8 +28,8 @@ def get_config(request: Request):
     result["use_built_in"] = bool(source_cfg.get("use_built_in", True)) if isinstance(source_cfg, dict) else True
     if result["use_built_in"]:
         builtin = helpers.get_builtin_config()
-        result["openai_base_url"] = builtin["openai_base_url"]
-        result["openai_model"] = builtin["openai_model"] or ""
+        result["openai_base_url"] = builtin["openai_base_url"] or cfg.openai_base_url
+        result["openai_model"] = builtin["openai_model"] or cfg.openai_model or ""
         result["openai_api_key"] = ""
         result["openai_api_key_set"] = bool(builtin["openai_api_key"])
         result["note"] = "当前使用内置模型 / Currently using built-in model"
@@ -97,11 +97,14 @@ def test_config(request: Request, req: ConnTestReq):
     user = um.get_user(user_id)
     saved_cfg = user.config or {}
     saved = LLMConfig.from_dict(saved_cfg)
-    use_built_in = bool(req.use_built_in if req.use_built_in is not None else saved_cfg.get("use_built_in", False))
+    use_built_in = bool(req.use_built_in if req.use_built_in is not None else saved_cfg.get("use_built_in", True))
     if use_built_in:
         builtin = helpers.get_builtin_config()
         api_key = builtin["openai_api_key"]
-        base_url = validate_openai_base_url(builtin["openai_base_url"] or "https://api.deepseek.com/v1")
+        try:
+            base_url = validate_openai_base_url(builtin["openai_base_url"] or "https://api.deepseek.com/v1")
+        except ValueError as e:
+            return {"ok": False, "latency_ms": 0, "error": f"ValueError: {e}"}
         model = builtin["openai_model"] or "deepseek-chat"
     else:
         api_key = req.openai_api_key
@@ -109,7 +112,10 @@ def test_config(request: Request, req: ConnTestReq):
             api_key = saved.openai_api_key
         base_url_arg = req.openai_base_url or saved.openai_base_url
         is_local = base_url_arg and any(h in base_url_arg.lower() for h in ("localhost", "127.0.0.1"))
-        base_url = validate_openai_base_url(base_url_arg, allow_local=is_local)
+        try:
+            base_url = validate_openai_base_url(base_url_arg, allow_local=is_local)
+        except ValueError as e:
+            return {"ok": False, "latency_ms": 0, "error": f"ValueError: {e}"}
         model = req.openai_model or saved.openai_model
     if not api_key:
         base_url_for_check = base_url or req.openai_base_url or saved.openai_base_url or ""

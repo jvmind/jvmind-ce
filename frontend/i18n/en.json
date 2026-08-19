@@ -228,6 +228,7 @@
   "chat.tool_done": "Done",
   "chat.tool_cancelled": "Stopped",
   "chat.tool_error_label": "Failed",
+  "chat.stream_timeout": "Stream timed out — no response from server. Please retry.",
   "chat.tool_args_label": "Arguments",
   "chat.trace_debug_title": "Debug trace (advanced)",
   "chat.collapse": "Collapse ▲",

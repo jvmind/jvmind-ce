@@ -356,6 +356,34 @@ class DatabaseMemory:
 
         finally:
             self.close()
+
+    def delete_messages(self, session_id: str, keep_last: int = 0) -> int:
+        """Delete the oldest messages of a session, keeping only the most recent
+        ``keep_last`` (by insertion order). Returns the number of rows deleted.
+
+        Used by the summarizer to drop the messages it compressed into a summary
+        fact, otherwise the messages table grows unboundedly across summarizations.
+        """
+        try:
+            rows = (
+                self.db.query(MessageModel)
+                .filter(MessageModel.session_id == session_id)
+                .order_by(MessageModel.id.asc())
+                .all()
+            )
+            if keep_last < 0:
+                keep_last = 0
+            if keep_last >= len(rows):
+                return 0
+            to_delete = rows[:len(rows) - keep_last] if keep_last > 0 else rows
+            ids = [m.id for m in to_delete]
+            if not ids:
+                return 0
+            self.db.query(MessageModel).filter(MessageModel.id.in_(ids)).delete(synchronize_session=False)
+            self.db.commit()
+            return len(ids)
+        finally:
+            self.close()
     # ---------- 长期记忆（facts） ----------
     def add_fact(self, session_id: str, fact: str) -> None:
         try:

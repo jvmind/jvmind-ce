@@ -111,6 +111,18 @@ def _positional(arg: str) -> list:
     return [p.strip() for p in _split_top_level(arg) if p.strip()]
 
 
+def _parse_json_kwargs(arg: str) -> Optional[Dict[str, Any]]:
+    """Parse a JSON-object arg string (used by mat_oql's typed invocation)."""
+    s = (arg or "").strip()
+    if not s.startswith("{"):
+        return None
+    try:
+        data = json.loads(s)
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def _fmt_bytes(n: Any) -> str:
     try:
         v = float(n)
@@ -539,17 +551,27 @@ def mat_oql(memory, session_id: str, arg: str, state: dict = None) -> str:
     from .graph.progress import _ProgressEmitter
     tcid = (state or {}).get("__current_tool_call_id__", "")
     with _ProgressEmitter(state or {}, tcid, "mat_oql", "Running OQL query..."):
-        pos = _positional(arg)
-        if len(pos) < 2:
-            return "用法 / usage: mat_oql(<report_id>,<query>[,limit,view,sort])"
-        rid, q = pos[0], pos[1]
+        kw = _parse_json_kwargs(arg)
+        if kw is not None:
+            rid = str(kw.get("report_id") or "")
+            q = str(kw.get("query") or "")
+            if not rid or not q:
+                return "用法 / usage: mat_oql(<report_id>,<query>[,limit,view,sort])"
+            limit = _int(kw.get("limit") if kw.get("limit") not in (None, "") else 50, 50)
+            view = str(kw.get("view") or "list").strip() or "list"
+            sort = str(kw.get("sort") or "shallow").strip() or "shallow"
+        else:
+            pos = _positional(arg)
+            if len(pos) < 2:
+                return "用法 / usage: mat_oql(<report_id>,<query>[,limit,view,sort])"
+            rid, q = pos[0], pos[1]
+            limit = _int(pos[2] if len(pos) > 2 else 50, 50)
+            view = (pos[3] if len(pos) > 3 else "list").strip() or "list"
+            sort = (pos[4] if len(pos) > 4 else "shallow").strip() or "shallow"
+        limit = max(1, min(limit, 200))
         rep = _load_report(memory, session_id, rid)
         if rep.get("error"):
             return rep["error"]
-        limit = _int(pos[2] if len(pos) > 2 else 50, 50)
-        limit = max(1, min(limit, 200))
-        view = (pos[3] if len(pos) > 3 else "list").strip() or "list"
-        sort = (pos[4] if len(pos) > 4 else "shallow").strip() or "shallow"
         params = {"dumpDir": rep["dump_dir"]}
         if view:
             params["view"] = view

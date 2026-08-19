@@ -80,6 +80,13 @@ def maybe_summarize(
     except Exception:
         logger.exception("maybe_summarize: set_context_fact failed")
         return False
+    # 删除已压缩进摘要的旧消息，避免 messages 表随会话增长无限膨胀
+    try:
+        deleter = getattr(memory, "delete_messages", None)
+        if callable(deleter):
+            deleter(session_id, keep_last=keep_last)
+    except Exception:
+        logger.exception("maybe_summarize: delete old messages failed")
     return True
 
 
@@ -113,7 +120,7 @@ def inject_summary_into_prompt(
         if not get_ctx:
             return system_prompt
         summary = get_ctx(session_id, _SUMMARY_KEY) or ""
-        if summary:
+        if summary and summary not in str(system_prompt):
             return system_prompt + f"\n\n[context:summary]\n{summary}"
     except Exception:
         logger.exception("inject_summary_into_prompt: lookup failed")

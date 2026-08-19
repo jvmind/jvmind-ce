@@ -144,7 +144,10 @@ async function initApp() {
   try {
     const cfg = await api("/api/config");
     const model = cfg.openai_model || "";
-    state.llmConfigured = !cfg.use_built_in && !!cfg.openai_base_url && !!model;
+    // Chat is usable with a real key, or with a local keyless endpoint
+    // (Ollama). Built-in mode reports openai_api_key_set when a builtin key exists.
+    const isLocalLlm = /localhost|127\.0\.0\.1/i.test(cfg.openai_base_url || "");
+    state.llmConfigured = !!model && (!!cfg.openai_api_key_set || isLocalLlm);
     const badge = document.getElementById("modelLabel");
     if (badge) {
       if (model) {
@@ -195,7 +198,6 @@ async function processPendingInvite() {
       body: JSON.stringify({ token: invite.token }),
     });
     alert(t("team.invite.accepted"));
-    await app.loadOrgInfo();
   } catch (e) {
     alert(e.message);
   }

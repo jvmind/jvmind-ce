@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Tuple
 from ..base import GCEvent, _to_mb
 from .base_parser import (
     _RE_GC_EVENT, _RE_GC_DURATION_ONLY, _RE_COLLECTOR, _RE_COLLECTOR_FLAG, _RE_ZGC_SUMMARY,
-    _RE_HEAP_MAX, _RE_HEAP_INIT, _parse_prefix, _classify, normalize_collector_name
+    _RE_HEAP_MAX, _RE_HEAP_INIT, _parse_prefix, _classify, _safe_float, normalize_collector_name
 )
 from . import zgc
 from . import shenandoah
@@ -104,27 +104,32 @@ def parse_gc_log_jdk9(text: str) -> Dict:
             gid, hb, ha = zgc_summary
             zgc_heap_by_id[gid] = (hb, ha)
             # For full ZGC GC like "Garbage Collection (System.gc())", the summary line
-            # contains the full type info already - create the full event here if it doesn't exist
-            m_z = _RE_ZGC_SUMMARY.match(body)
-            raw_type = m_z.group("full").strip()
-            cat, cause, is_concurrent = _classify(raw_type)
-            key = (gid, cat, raw_type)
-            if key not in by_key:
-                by_key[key] = GCEvent(
-                    id=gid,
-                    uptime_sec=uptime,
-                    absolute_epoch_ms=abs_epoch_ms,
-                    category=cat,
-                    cause=cause,
-                    heap_before_mb=hb,
-                    heap_after_mb=ha,
-                    heap_total_mb=0,
-                    duration_ms=0,
-                    raw_type=raw_type,
-                    raw_lines=[body.strip()],
-                    is_concurrent=is_concurrent,
-                )
-                parsed += 1
+            # contains the full type info already - create the full event here if it
+            # doesn't exist. Only real Full collections create an event: plain cycle
+            # summaries ("Garbage Collection (Warmup)") are just heap snapshots and
+            # would otherwise add phantom duration=0 "Other" events per cycle.
+            m_z = _RE_ZGC_SUMMARY.search(body)
+            if m_z is not None:
+                raw_type = m_z.group("full").strip()
+                cat, cause, is_concurrent = _classify(raw_type)
+                if cat == "Full":
+                    key = (gid, cat, raw_type)
+                    if key not in by_key:
+                        by_key[key] = GCEvent(
+                            id=gid,
+                            uptime_sec=uptime,
+                            absolute_epoch_ms=abs_epoch_ms,
+                            category=cat,
+                            cause=cause,
+                            heap_before_mb=hb,
+                            heap_after_mb=ha,
+                            heap_total_mb=0,
+                            duration_ms=0,
+                            raw_type=raw_type,
+                            raw_lines=[body.strip()],
+                            is_concurrent=is_concurrent,
+                        )
+                        parsed += 1
 
         # Check for Shenandoah summary
         shenandoah_summary = shenandoah.collect_heap_summary(body)
@@ -144,10 +149,10 @@ def parse_gc_log_jdk9(text: str) -> Dict:
                 absolute_epoch_ms=abs_epoch_ms,
                 category=cat,
                 cause=cause,
-                heap_before_mb=_to_mb(float(m.group("hb")), m.group("hbu")),
-                heap_after_mb=_to_mb(float(m.group("ha")), m.group("hau")),
-                heap_total_mb=_to_mb(float(m.group("ht")), m.group("htu")),
-                duration_ms=float(m.group("dur")),
+                heap_before_mb=_to_mb(_safe_float(m.group("hb")), m.group("hbu")),
+                heap_after_mb=_to_mb(_safe_float(m.group("ha")), m.group("hau")),
+                heap_total_mb=_to_mb(_safe_float(m.group("ht")), m.group("htu")),
+                duration_ms=_safe_float(m.group("dur")),
                 raw_type=raw_type,
                 raw_lines=[body.strip()],
                 is_concurrent=is_concurrent,
@@ -175,7 +180,7 @@ def parse_gc_log_jdk9(text: str) -> Dict:
                         absolute_epoch_ms=abs_epoch_ms,
                         category=cat,
                         cause=cause,
-                        duration_ms=float(m2.group("dur")),
+                        duration_ms=_safe_float(m2.group("dur")),
                         raw_type=raw_type,
                         raw_lines=[body.strip()],
                         is_concurrent=is_concurrent,
@@ -185,16 +190,16 @@ def parse_gc_log_jdk9(text: str) -> Dict:
     # For ZGC: accumulate all pause durations from multiple phases of the same GC ID
     # because ZGC splits one full GC into multiple STW phases across multiple lines,
     # each with its own pause time that needs to be accumulated
-    # Always do this accumulation if we have ZGC-style events with categories ZGC,
-    # even if collector wasn't detected early
-    has_zgc_events = any(ev.category == 'ZGC' or 'Pause' in ev.raw_type for ev in by_key.values())
+    # Gate on the ZGC *category* only: G1/Shenandoah "Pause ..." raw_types also
+    # contain "Pause" and must not be routed into ZGC accumulation.
+    has_zgc_events = any(ev.category == 'ZGC' for ev in by_key.values())
     if has_zgc_events:
         # Accumulate only STW pause durations per GC ID
         total_pause_by_gcid: Dict[int, float] = {}
         for ev in by_key.values():
             gid = ev.id
             # Only accumulate Pause phases (they are STW pauses)
-            if 'Pause' in ev.raw_type or ev.category == 'ZGC':
+            if ev.category == 'ZGC':
                 if gid not in total_pause_by_gcid:
                     total_pause_by_gcid[gid] = 0.0
                 total_pause_by_gcid[gid] += ev.duration_ms

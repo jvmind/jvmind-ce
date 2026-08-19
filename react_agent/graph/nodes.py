@@ -9,8 +9,8 @@ from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
     SystemMessage,
+    ToolMessage,
 )
-from langgraph.prebuilt import ToolNode
 
 from .state import MAX_HISTORY_MESSAGES
 
@@ -30,7 +30,14 @@ def _trim_history(msgs: List[BaseMessage]) -> List[BaseMessage]:
     """Keep the SystemMessage (if any at position 0) plus the latest
     ``MAX_HISTORY_MESSAGES`` non-system messages. This mirrors legacy
     ``history[-40:]`` behaviour, preventing per-call context from growing
-    unboundedly across tool iterations."""
+    unboundedly across tool iterations.
+
+    Trimming must not split a tool_call/ToolMessage pair: leading ToolMessages
+    whose AIMessage got cut off are dropped, otherwise the provider rejects
+    the request (``Messages with role='tool' must be a response to a preceding
+    message with tool_calls``). A trailing AIMessage with tool_calls is kept
+    whole — its ToolMessages arrive in the following tool iteration.
+    """
     if not msgs:
         return msgs
     head: List[BaseMessage] = []
@@ -40,7 +47,10 @@ def _trim_history(msgs: List[BaseMessage]) -> List[BaseMessage]:
         rest = rest[1:]
     if len(rest) <= MAX_HISTORY_MESSAGES:
         return msgs
-    return head + rest[-MAX_HISTORY_MESSAGES:]
+    trimmed = rest[-MAX_HISTORY_MESSAGES:]
+    while trimmed and isinstance(trimmed[0], ToolMessage):
+        trimmed.pop(0)
+    return head + trimmed
 
 
 def _render_system_prompt(
@@ -109,10 +119,6 @@ def agent_node(
     bound = llm.bind_tools(tools)
     response = bound.invoke(msgs)
     return {"messages": [response]}
-
-
-def build_tool_node(tools) -> ToolNode:
-    return ToolNode(tools, handle_tool_errors=True)
 
 
 def tool_postprocess_node(state: Dict[str, Any]) -> Dict[str, Any]:

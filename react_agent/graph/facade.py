@@ -1,7 +1,7 @@
 """LangGraphAgent — single-path execution facade."""
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Generator, List, Optional
 
 from langchain_core.messages import BaseMessage
 from openai import OpenAI
@@ -124,29 +124,6 @@ class LangGraphAgent(_LLMMixin):
     def load_skills(self, skills: List[dict]) -> None:
         self._skill_defs = list(skills or [])
         self._build()
-
-    def _build_system_prompt(self, session_id: str, lang: str) -> str:
-        from ..prompts import build_system_prompt
-        facts = self.memory.get_prompt_facts(session_id) if self.memory is not None else []
-        tools_describe = self._describe_tools(self._tools, lang)
-        return build_system_prompt(
-            tool_names=self._tool_names,
-            tool_descriptions=tools_describe,
-            facts=facts,
-            template=self.system_prompt_template or None,
-            extra=self.system_prompt_extra,
-            lang=lang,
-        )
-
-    def run(self, session_id: str, user_input: str, lang: str = "") -> Tuple[str, List[Dict[str, Any]]]:
-        steps: List[Dict[str, Any]] = []
-        final_text = ""
-        for event in self.run_stream(session_id, user_input, lang=lang):
-            if event.get("type") == "step":
-                steps.append(event)
-            elif event.get("type") == "final":
-                final_text = event.get("content", "")
-        return final_text, steps
 
     def run_stream(
         self,

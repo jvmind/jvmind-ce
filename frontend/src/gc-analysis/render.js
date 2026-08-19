@@ -581,7 +581,7 @@ export async function saveToReport(type, content, btn) {
     targetReport = reports[0];
     targetType = targetReport.type;
     if (btn) {
-      const label = targetReport.filename || targetReport.report_id || '';
+      const label = escapeHtml(targetReport.filename || targetReport.report_id || '');
       btn.innerHTML = (getLang() === 'zh' ? ico('save') + ' 保存到: ' : ico('save') + ' Save to: ') + label;
     }
   } else {
@@ -611,7 +611,7 @@ export async function saveToReport(type, content, btn) {
     });
     if (res.ok) {
       if (btn) {
-        const label = targetReport.filename || targetReport.report_id || '';
+        const label = escapeHtml(targetReport.filename || targetReport.report_id || '');
         btn.innerHTML = ico('check') + ' ' + label;
         setTimeout(() => { if (btn) btn.textContent = t("chat.save_to_report"); }, 3000);
       }

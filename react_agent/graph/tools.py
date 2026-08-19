@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import json
 from typing import Any, Dict, List, Literal, Optional
 
 from langchain_core.tools import StructuredTool
@@ -233,8 +234,17 @@ def _build_mat_tool(memory, name: str, desc: str, props: Dict, required: List[st
 
     def _invoke(state: dict = None, **kw):
         sid = _sid(state)
-        parts = [str(kw[k]) for k in keys if kw.get(k) not in (None, "")]
-        arg_str = ",".join(parts)
+        if name == "mat_oql":
+            # mat_oql's free-form `query` legitimately contains commas (e.g.
+            # "SELECT a, b FROM ..."). Serializing as JSON kwargs keeps the
+            # query intact; mat_oql parses the dict back out.
+            arg_str = json.dumps(
+                {k: kw.get(k) for k in keys if kw.get(k) not in (None, "")},
+                ensure_ascii=False,
+            )
+        else:
+            parts = [str(kw[k]) for k in keys if kw.get(k) not in (None, "")]
+            arg_str = ",".join(parts)
         return dispatch_mat_tool(memory, sid, name, arg_str, state=state)
 
     _invoke.__name__ = f"_invoke_{name}"

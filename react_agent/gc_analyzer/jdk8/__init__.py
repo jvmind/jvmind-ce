@@ -10,7 +10,8 @@ from typing import Dict, List, Optional
 from ..base import GCEvent, _to_mb, _iso_to_epoch_ms
 from .base_parser import (
     _RE_TS, _RE_TS_DATE_ONLY, _RE_GEN, _RE_GC_CAUSE, _RE_CONCURRENT, _RE_CONCURRENT_DEDUP, _RE_CMS_CONCURRENT, _RE_REMARK, _RE_CLEANUP, _RE_G1_PAUSE, _RE_HEAP,
-    _preprocess_lines, _detect_collector, _classify_concurrent, _extract_heap, _extract_duration_secs, _extract_metaspace, _extract_jvm_args
+    _preprocess_lines, _detect_collector, _classify_concurrent, _extract_heap, _extract_duration_secs, _extract_metaspace, _extract_jvm_args,
+    _safe_float,
 )
 from .g1 import parse_g1_pause
 from .generational import parse_generational_gc
@@ -89,7 +90,7 @@ def parse_gc_log_jdk8(text: str) -> Dict:
             uptime_val = m_ts.group(1)
             body = m_ts.group(m_ts.lastindex) or ""
             try:
-                uptime = float(uptime_val)
+                uptime = _safe_float(uptime_val)
             except (ValueError, TypeError):
                 uptime = None
         else:
@@ -149,7 +150,7 @@ def parse_gc_log_jdk8(text: str) -> Dict:
                         consumed = j - i + 1
                         m_dur = re.search(r",\s+([\d.]+)\s+secs\]", next_line)
                         if m_dur:
-                            closing_dur_secs = float(m_dur.group(1))
+                            closing_dur_secs = _safe_float(m_dur.group(1))
                         break
 
             if heap:
@@ -162,9 +163,9 @@ def parse_gc_log_jdk8(text: str) -> Dict:
                     uptime_sec=uptime,
                     category="Full",
                     cause=cause,
-                    heap_before_mb=_to_mb(float(hb), hbu),
-                    heap_after_mb=_to_mb(float(ha), hau),
-                    heap_total_mb=_to_mb(float(ht), htu),
+                    heap_before_mb=_to_mb(_safe_float(hb), hbu),
+                    heap_after_mb=_to_mb(_safe_float(ha), hau),
+                    heap_total_mb=_to_mb(_safe_float(ht), htu),
                     duration_ms=dur_secs * 1000,
                     raw_type=body.strip(),
                     absolute_epoch_ms=abs_epoch_ms,
@@ -186,7 +187,7 @@ def parse_gc_log_jdk8(text: str) -> Dict:
                 event_id += 1
                 events.append(ev)
                 parsed += 1
-                heap_mb = _to_mb(float(ht), htu)
+                heap_mb = _to_mb(_safe_float(ht), htu)
                 if heap_mb > 0 and (heap_max_mb is None or heap_mb > heap_max_mb):
                     heap_max_mb = heap_mb
             else:
@@ -199,7 +200,7 @@ def parse_gc_log_jdk8(text: str) -> Dict:
             # Only concurrent if no heap change - avoid miscleanup matching
             phase = m_cc.group(1)
             dur_str = m_cc.group(2)
-            dur_ms = float(dur_str) * 1000 if dur_str else 0.0
+            dur_ms = _safe_float(dur_str) * 1000 if dur_str else 0.0
             ev_kwargs = dict(
                 id=event_id,
                 uptime_sec=uptime,
@@ -257,7 +258,7 @@ def parse_gc_log_jdk8(text: str) -> Dict:
         if m_cc_cms:
             phase = m_cc_cms.group(1)
             dur_str = m_cc_cms.group(3) or m_cc_cms.group(2) or ""
-            dur_ms = float(dur_str) * 1000 if dur_str else 0.0
+            dur_ms = _safe_float(dur_str) * 1000 if dur_str else 0.0
             cause = f"CMS-concurrent-{phase}"
             ev_kwargs = dict(
                 id=event_id,
@@ -295,9 +296,9 @@ def parse_gc_log_jdk8(text: str) -> Dict:
                     uptime_sec=uptime,
                     category="Mixed",
                     cause="concurrent-mark-start",
-                    heap_before_mb=_to_mb(float(hb), hbu),
-                    heap_after_mb=_to_mb(float(ha), hau),
-                    heap_total_mb=_to_mb(float(ht), htu),
+                    heap_before_mb=_to_mb(_safe_float(hb), hbu),
+                    heap_after_mb=_to_mb(_safe_float(ha), hau),
+                    heap_total_mb=_to_mb(_safe_float(ht), htu),
                     duration_ms=dur_secs * 1000,
                     raw_type=body.strip(),
                     absolute_epoch_ms=abs_epoch_ms,
@@ -313,7 +314,7 @@ def parse_gc_log_jdk8(text: str) -> Dict:
                 event_id += 1
                 events.append(ev)
                 parsed += 1
-                heap_mb = _to_mb(float(ht), htu)
+                heap_mb = _to_mb(_safe_float(ht), htu)
                 if heap_mb > 0 and (heap_max_mb is None or heap_mb > heap_max_mb):
                     heap_max_mb = heap_mb
                 continue
@@ -325,7 +326,7 @@ def parse_gc_log_jdk8(text: str) -> Dict:
         # 2) G1 remark (no heap change)
         m_rm = _RE_REMARK.search(body)
         if m_rm and not _extract_heap(body):
-            dur_ms = float(m_rm.group(1)) * 1000
+            dur_ms = _safe_float(m_rm.group(1)) * 1000
             ev_kwargs = dict(
                 id=event_id,
                 uptime_sec=uptime,
@@ -372,9 +373,9 @@ def parse_gc_log_jdk8(text: str) -> Dict:
                     uptime_sec=uptime,
                     category="Cleanup",
                     cause="cleanup",
-                    heap_before_mb=_to_mb(float(hb), hbu),
-                    heap_after_mb=_to_mb(float(ha), hau),
-                    heap_total_mb=_to_mb(float(ht), htu),
+                    heap_before_mb=_to_mb(_safe_float(hb), hbu),
+                    heap_after_mb=_to_mb(_safe_float(ha), hau),
+                    heap_total_mb=_to_mb(_safe_float(ht), htu),
                     duration_ms=dur_secs * 1000,
                     raw_type=body.strip(),
                     absolute_epoch_ms=abs_epoch_ms,

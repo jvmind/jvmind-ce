@@ -11,7 +11,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 from datetime import timedelta
+from pathlib import Path
 
 from sqlalchemy import text
 
@@ -72,6 +74,37 @@ def _sweep_once() -> int:
                 ), {"att": attempts + 1, "rid": rid})
                 _logger.warning("[watchdog] rid=%s → QUEUED (attempt %d)", rid, attempts + 1)
             handled += 1
+
+        # 扫 CANCEL_REQUESTED：worker 已死（心跳超时）时没有任何代码会把它转成终态，
+        # 这里落 CANCELLED 并清理 dump_dir，否则任务永久卡在非终态（前端无限转圈）。
+        cancel_rows = db.execute(text(
+            "SELECT id, heartbeat, started_at, dump_dir FROM heapdump_reports "
+            "WHERE status = 'CANCEL_REQUESTED'"
+        )).mappings().all()
+        for row in cancel_rows:
+            hb_ts = parse_to_epoch(row["heartbeat"]) if row["heartbeat"] else 0.0
+            if hb_ts == 0.0:
+                hb_ts = parse_to_epoch(row["started_at"]) if row["started_at"] else 0.0
+            if hb_ts != 0.0 and now_ts - hb_ts <= _HEARTBEAT_TIMEOUT:
+                # 心跳还新鲜：worker 可能马上处理取消，稍后再扫
+                continue
+            rid = row["id"]
+            db.execute(text(
+                "UPDATE heapdump_reports "
+                "SET status = 'CANCELLED', worker_id = '', finished_at = :now, error = 'user cancelled' "
+                "WHERE id = :rid AND status = 'CANCEL_REQUESTED'"
+            ), {"rid": rid, "now": now_str()})
+            dump_dir = row["dump_dir"] or ""
+            if dump_dir:
+                try:
+                    p = Path(dump_dir)
+                    if p.exists() and p.is_dir():
+                        shutil.rmtree(p, ignore_errors=True)
+                except Exception:
+                    _logger.warning("[watchdog] failed to clean dump_dir on cancel rid=%s", rid, exc_info=True)
+            _logger.warning("[watchdog] rid=%s → CANCELLED (stale cancel request)", rid)
+            handled += 1
+
         db.commit()
     except Exception:
         db.rollback()

@@ -25,6 +25,9 @@ recursive-include frontend/src *
 # Bundled MAT query-service plugin (used by heapdump_worker)
 include vendor/mat/*.jar
 
+# Optional JDK flags reference data for validate_jvm_args (see README)
+include react_agent/jdk_args_ref/*
+
 # Repository root files
 include LICENSE
 include README.md

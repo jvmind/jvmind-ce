@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -81,6 +82,29 @@ def _detect_hprof_kind(head: bytes) -> str:
         "文件不是有效的 Java heap dump (缺少 JAVA PROFILE 或 gzip 魔数) / "
         "File is not a valid Java heap dump (missing JAVA PROFILE or gzip magic)",
     )
+
+
+def _merge_parts(parts: list, tmp_hprof: Path) -> tuple:
+    """把分块顺序合并到 tmp_hprof，返回 (kind, total_size)。
+
+    GB 级拷贝是磁盘 IO 密集操作，调用方应在 ``asyncio.to_thread`` 中执行。
+    """
+    kind: Optional[str] = None
+    total = 0
+    with open(tmp_hprof, "wb") as out:
+        for p in parts:
+            with open(p, "rb") as src:
+                while True:
+                    buf = src.read(1 << 20)  # 1 MiB
+                    if not buf:
+                        break
+                    if kind is None:
+                        kind = _detect_hprof_kind(buf[:32] if len(buf) >= 32 else buf)
+                    out.write(buf)
+                    total += len(buf)
+        if kind is None:
+            raise HTTPException(400, "合并结果为空 / Empty merge result")
+    return kind, total
 
 
 # ---------- 端点 ----------
@@ -253,22 +277,9 @@ async def complete_upload(request: Request, uid: str):
     dump_dir = _dump_dir(report_id)
     dump_dir.mkdir(parents=True, exist_ok=True)
     tmp_hprof = dump_dir / ".app.merging"  # 先写临时名，确定 kind 后再 rename
-    total_size = 0
-    kind: Optional[str] = None
     try:
-        with open(tmp_hprof, "wb") as out:
-            for p in parts:
-                with open(p, "rb") as src:
-                    while True:
-                        buf = src.read(1 << 20)  # 1 MiB
-                        if not buf:
-                            break
-                        if kind is None:
-                            kind = _detect_hprof_kind(buf[:32] if len(buf) >= 32 else buf)
-                        out.write(buf)
-                        total_size += len(buf)
-            if kind is None:
-                raise HTTPException(400, "合并结果为空 / Empty merge result")
+        # GB 级磁盘合并丢到线程池，避免阻塞事件循环。
+        kind, total_size = await asyncio.to_thread(_merge_parts, parts, tmp_hprof)
 
         # 原子 rename 到最终文件名（MAT 依扩展名区分是否解压）
         final_name = "app.hprof.gz" if kind == "gzip" else "app.hprof"

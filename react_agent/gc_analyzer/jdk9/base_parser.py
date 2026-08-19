@@ -55,6 +55,18 @@ _RE_HEAP_MAX = re.compile(r"(?:Heap\s+)?Max\s+Capacity[:\s]+(\d+(?:\.\d+)?)([BKM
 _RE_HEAP_INIT = re.compile(r"(?:Heap\s+)?(?:Initial|Min)\s+Capacity[:\s]+(\d+(?:\.\d+)?)([BKMG])", re.I)
 
 
+def _safe_float(value, default: float = 0.0) -> float:
+    """Convert a numeric string to float without crashing on malformed input.
+
+    Malformed/truncated log lines can carry values like ``1.2.3`` that
+    ``float()`` rejects; a single bad line must not kill the whole parse.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _parse_prefix(line: str) -> Tuple[Optional[float], Optional[float], str]:
     """Strip leading brackets, return (uptime_sec, absolute_epoch_ms, remaining text)."""
     m = _RE_PREFIX_BRACKETS.match(line)
@@ -117,7 +129,9 @@ def _classify(full_type: str) -> Tuple[str, str, bool]:
     # 优先级：Full > Mixed > Young > ZGC pause > Shenandoah > Remark > Cleanup > InitialMark > Concurrent
     # Full GC detection:
     # 1. Explicitly has the word "full" (Full GC), OR
-    # 2. "major collection" AND cause is "system.gc()" - JDK25+ ZGC uses this format for System.gc()
+    # 2. "major collection" — generational ZGC JDK21+ old-gen collection. A major
+    #    collection IS a full-gen collection regardless of its cause
+    #    (Allocation Stall, System.gc(), ...), so every "Major Collection" maps to Full.
     # 3. "Garbage Collection (X)" where X is a known Full GC trigger (manual OR real):
     #    - System.gc()                       (manual: application code call)
     #    - Heap Inspection Initiated GC       (manual: jcmd inspection)
@@ -126,7 +140,8 @@ def _classify(full_type: str) -> Tuple[str, str, bool]:
     #    - Allocation Failure                (real heap pressure — old gen full)
     # Use word boundary check to avoid false positives like "Warm**full**" matching "full"
     has_full = re.search(r'\bfull\b', raw_lower) is not None
-    has_major_systemgc = re.search(r'\bmajor collection\b', raw_lower) is not None and cause.lower() == "system.gc()"
+    has_major_collection = re.search(r'\bmajor collection\b', raw_lower) is not None
+    has_minor_collection = re.search(r'\bminor collection\b', raw_lower) is not None
     # Causes that signal a Full GC event (manual triggers OR real heap pressure)
     _FULL_GC_CAUSES = {
         "system.gc()",
@@ -135,21 +150,21 @@ def _classify(full_type: str) -> Tuple[str, str, bool]:
         "allocation stall",
         "allocation failure",  # CMS / ZGC JDK21 real heap-pressure trigger
     }
-    if has_full or has_major_systemgc or (
+    if has_full or has_major_collection or (
         "garbage collection" in raw_lower and cause.lower().strip() in _FULL_GC_CAUSES
     ):
         cat = "Full"
     elif "mixed" in raw_lower:  # G1: Pause Young (Mixed)
         cat = "Mixed"
-    elif "young" in raw_lower and not has_z_generation_prefix:
+    elif has_minor_collection or ("young" in raw_lower and not has_z_generation_prefix):
         cat = "Young"
     elif has_z_generation_prefix and any(k in sl for k in ("mark start", "mark end", "relocate start")):
         cat = "ZGC"
     elif any(k in sl for k in ("mark start", "mark end", "relocate start", "relocate end")):
         cat = "ZGC"
-    elif any(k in sl for k in (
+    elif ("degenerated" in sl or any(k in sl for k in (
         "final roots", "init mark", "final mark", "init update refs", "final update refs", "concurrent marking"
-    )) or ("concurrent cleanup" in sl and "for next mark" not in sl):
+    )) or ("concurrent cleanup" in sl and "for next mark" not in sl)):
         cat = "Shenandoah"
     elif "remark" in sl:
         cat = "Remark"

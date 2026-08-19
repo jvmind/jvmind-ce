@@ -182,7 +182,7 @@ async def heapdump_progress_stream(request: Request, report_id: str):
 
 @router.post("/api/heapdump-reports/{report_id}/cancel")
 def cancel_heapdump_report(request: Request, report_id: str):
-    """置 status=CANCEL_REQUESTED，由 Worker 检测到后 kill 子进程 + 清理半成品。"""
+    """取消报告：QUEUED 直接终态化；PARSING 置 CANCEL_REQUESTED 由 Worker kill 子进程。"""
     user_id = helpers._get_current_user(request)
     helpers._check_analysis_feature(user_id, "heapdump")
     r = _load_report(user_id, report_id)
@@ -191,6 +191,26 @@ def cancel_heapdump_report(request: Request, report_id: str):
         raise HTTPException(409, f"当前状态无法取消 (status={status}) / cannot cancel in {status}")
 
     agent = helpers._get_agent(user_id)
+    if status == "QUEUED":
+        # 任务尚未被任何 worker 认领：直接落终态。置 CANCEL_REQUESTED 是死路——
+        # claim 只认 QUEUED、watchdog 只扫 PARSING，没有任何路径会把 QUEUED 的
+        # CANCEL_REQUESTED 转成终态，任务会永久卡在非终态。
+        ok = agent.memory.update_heapdump_report(None, report_id, status="CANCELLED")
+        if not ok:
+            raise HTTPException(404, "报告不存在 / not found")
+        dump_dir = r.get("dump_dir")
+        if dump_dir:
+            try:
+                p = Path(dump_dir)
+                if p.exists() and p.is_dir():
+                    shutil.rmtree(p, ignore_errors=True)
+            except Exception:
+                _logger.warning("failed to clean dump_dir on cancel rid=%s", report_id, exc_info=True)
+        log_audit(request, "report.heapdump.cancel", user_id=user_id,
+                  resource=f"heapdump_report:{report_id}",
+                  details={"prev_status": status, "terminal": True})
+        return {"cancelled": True, "status": "CANCELLED"}
+
     ok = agent.memory.update_heapdump_report(None, report_id, status="CANCEL_REQUESTED")
     if not ok:
         raise HTTPException(404, "报告不存在 / not found")

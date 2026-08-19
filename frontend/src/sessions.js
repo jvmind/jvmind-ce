@@ -50,6 +50,7 @@ export function resetSessionView() {
 // 团队会话 Tab 切换
 document.querySelectorAll(".session-tab").forEach(tab => {
   tab.onclick = () => {
+    if (state.isStreaming) return; // 流式输出中禁止切换会话 Tab，避免输出写入脱离 DOM 的节点
     const nextTab = tab.dataset.tab;
     if (state.sessionTab !== nextTab) {
       state.sessionTab = nextTab;
@@ -341,6 +342,7 @@ export async function selectSession(sid) {
 }
 
 export async function newSession() {
+  if (state.isStreaming) return; // 流式中点"新会话"会改变 currentSessionId 但旧流仍写入旧 DOM，状态错乱
   const body = {};
   if (state.sessionTab === "org" && state.currentOrg) body.org_id = state.currentOrg.id;
   try {

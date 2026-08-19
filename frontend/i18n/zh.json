@@ -228,6 +228,7 @@
   "chat.tool_done": "完成",
   "chat.tool_cancelled": "已停止",
   "chat.tool_error_label": "失败",
+  "chat.stream_timeout": "连接超时，服务端无响应，请重试。",
   "chat.tool_args_label": "参数",
   "chat.trace_debug_title": "调试详情 (高级)",
   "chat.collapse": "收起 ▲",

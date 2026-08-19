@@ -155,7 +155,15 @@ def validate_jvm_args(input_str: str) -> str:
     try:
         flags = _load(version)
     except FileNotFoundError:
-        return f"Error: reference file for JDK {version} not found."
+        return (
+            f"Error: JDK flag reference data for JDK {version} is not bundled with this build "
+            f"({os.path.join(_REF_DIR, f'jdk{version}-flags.txt')} missing). "
+            "Flag validation is unavailable — do NOT fabricate an OK/MISS verdict. "
+            "Advise the user to verify the flags against `java -XX:+PrintFlagsFinal -version` "
+            "on their target JDK instead. / "
+            f"当前构建未附带 JDK {version} 的官方参数参考数据，无法校验参数。"
+            "请不要编造校验结论，建议用户用 `java -XX:+PrintFlagsFinal -version` 自行核对。"
+        )
 
     flag_parts = parts[1:]
     if not flag_parts:

@@ -87,7 +87,7 @@ async def worker_loop(stop_event: asyncio.Event) -> None:
                 async def _stats_heartbeat():
                     from .parse import _update_fields
                     from ..timeutil import now_str
-                    interval = float(os.getenv("HEAPDUMP_WORKER_HEARTBEAT_INTERVAL", "30"))
+                    interval = get_heartbeat_interval()
                     while not stop_hb.is_set():
                         _update_fields(rid, heartbeat=now_str())
                         try:
@@ -114,15 +114,22 @@ async def worker_loop(stop_event: asyncio.Event) -> None:
                         pass
                 from .parse import _update_fields
                 from ..timeutil import now_str
+                # 解析已成功、index 已生成：即使 stats 回填失败也保持 DONE（对齐
+                # stats.py docstring "失败时不改 DONE 状态"），stats 留空可事后重试，
+                # 绝不让瞬时 query-service 故障把已成功的解析标记成 FAILED。
+                _update_fields(
+                    rid,
+                    status="DONE",
+                    progress=100,
+                    phase="DONE",
+                    finished_at=now_str(),
+                    error="",
+                    where_status="PARSING",
+                )
                 if backfill_ok:
-                    _update_fields(rid, status="DONE", progress=100, phase="DONE",
-                                   finished_at=now_str(), error="")
                     _logger.info("[worker] rid=%s DONE", rid)
                 else:
-                    _update_fields(rid, status="FAILED",
-                                   finished_at=now_str(),
-                                   error="failed to load overview stats from MAT")
-                    _logger.warning("[worker] rid=%s backfill_stats failed", rid)
+                    _logger.warning("[worker] rid=%s parsed OK but stats backfill failed; keeping DONE", rid)
             elif final_status == "CANCELLED":
                 pass
             else:

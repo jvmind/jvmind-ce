@@ -98,7 +98,9 @@ def _prep(request: Request, report_id: str) -> tuple:
     status = r.get("status")
     if status != "DONE":
         if status in ("QUEUED", "PARSING", "CANCEL_REQUESTED"):
-            pct = int((r.get("progress") or 0) * 100)
+            raw_progress = r.get("progress") or 0
+            # Worker 存 0-100 整数；兼容旧 0-1 数据
+            pct = int(raw_progress * 100) if raw_progress <= 1.0 else int(raw_progress)
             raise HTTPException(
                 409,
                 f"解析中(进度 {pct}%)，稍后再试 / Parsing in progress ({pct}%), try again later",

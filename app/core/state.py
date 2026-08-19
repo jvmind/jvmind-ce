@@ -96,6 +96,10 @@ _AGENTS_LOCK = threading.RLock()
 _SESSION_LOCKS: Dict[str, threading.Lock] = {}
 _SESSION_LOCKS_GUARD = threading.Lock()
 
+# 会话取消标志（/api/chat/stop 置位，SSE 适配器在 chunk 间查询）
+_CANCEL_FLAGS: Dict[str, bool] = {}
+_CANCEL_FLAGS_GUARD = threading.Lock()
+
 _COOKIE_SECURE = os.getenv("COOKIE_SECURE", "0").lower() in ("1", "true", "yes")
 _ALLOWED_ORIGINS = [o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()]
 if not _ALLOWED_ORIGINS:

@@ -7,6 +7,18 @@ from typing import Dict, List, Optional, Tuple
 from ..base import GCEvent, _to_mb
 
 
+def _safe_float(value, default: float = 0.0) -> float:
+    """Convert a numeric string to float without crashing on malformed input.
+
+    Malformed/truncated log lines can carry values like ``1.2.3`` that
+    ``float()`` rejects; a single bad line must not kill the whole parse.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 # ---------- 公共正则 ----------
 # 行首时间戳: "12.345: " 或 "2024-06-01T12:00:00.123+0800: 12.345: "
 # JDK8 时间戳：uptime, date+uptime, 或仅 date（此时 uptime=None）
@@ -128,11 +140,11 @@ def _extract_duration_secs(body: str) -> float:
         after = body
     m = re.search(r",\s+([\d.]+)\s+secs", after)
     if m:
-        return float(m.group(1))
+        return _safe_float(m.group(1))
     # Fallback: search for [Times: real=X.XX secs]
     m = _RE_TIMES.search(body)
     if m:
-        return float(m.group(1))
+        return _safe_float(m.group(1))
     return 0.0
 
 
@@ -165,9 +177,9 @@ def _extract_metaspace(body: str) -> Optional[Tuple[float, float, float]]:
     if not m:
         return None
     return (
-        _to_mb(float(m.group("mb")), m.group("mbu")),
-        _to_mb(float(m.group("ma")), m.group("mau")),
-        _to_mb(float(m.group("mt")), m.group("mtu")),
+        _to_mb(_safe_float(m.group("mb")), m.group("mbu")),
+        _to_mb(_safe_float(m.group("ma")), m.group("mau")),
+        _to_mb(_safe_float(m.group("mt")), m.group("mtu")),
     )
 
 
