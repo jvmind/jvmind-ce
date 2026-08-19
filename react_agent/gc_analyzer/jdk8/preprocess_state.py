@@ -89,18 +89,19 @@ def _is_safepoint(line: str) -> bool:
     )
 
 
-def _brackets_balanced(s: str) -> bool:
-    """Check if `[` and `]` are balanced in the string.
+def _line_depth_delta(line: str) -> int:
+    """Compute the change in bracket depth for a single line.
 
-    Used to detect G1 Full GC with embedded concurrent events: the Full GC
-    body has unbalanced brackets until the final closing `]` arrives. For
-    example:
-        [Full GC (cause) ... [GC concurrent-...start]   <- unbalanced
-            ... [GC concurrent-...end, X secs]          <- still unbalanced
-            ... [GC concurrent-...start]                <- still unbalanced
-         NNNM->NNNM(NNNM), X secs]                      <- balanced NOW
+    Used to track the running `[` vs `]` balance of the in-progress event.
+    `delta > 0` means new unmatched opens; `delta < 0` means closing brackets.
+    For most GC log lines, `delta == 0` (balanced). For G1 Full GC with
+    embedded concurrent events, the body has `delta > 0` until the final
+    `secs]` line arrives (e.g. `[Full GC (cause) ... [GC concurrent-...start]`).
+
+    O(n) per call but O(1) amortized across the parse: each character is
+    counted once as we process each line.
     """
-    return s.count("[") == s.count("]")
+    return line.count("[") - line.count("]")
 
 
 def _open_new_event(line: str) -> bool:
@@ -155,16 +156,30 @@ def parse_to_raw_events(text: str) -> List[RawGCEvent]:
         └─ any other content                → skipped
 
       IN_EVENT
+        ├─ new [GC / [Full GC event         → flush+open (unless bracket_depth > 0)
         ├─ [Times: ...] / `secs]` close     → SEEKING (event finalized)
-        ├─ new [GC / [Full GC event         → SEEKING then IN_EVENT (flush+open)
         ├─ Heap after GC block              → finalize event, then IN_HEAP_AFTER
         ├─ `{Heap before GC` (rare)         → finalize event, then IN_HEAP_BEFORE
         ├─ safepoint                        → finalize event, then SEEKING
         └─ continuation line (no timestamp) → append to current event
+
+    Bracket-depth tracking:
+      `bracket_depth` is maintained as a running counter that increments on
+      `[` and decrements on `]` for each line added to `current_lines`. When
+      `bracket_depth > 0`, the in-progress event has unmatched opening
+      brackets — typical of G1 Full GC with embedded concurrent events:
+          [Full GC (cause) ... [GC concurrent-...start]
+            ... [GC concurrent-...end, X secs]
+            ... [GC concurrent-...start]
+         NNNM->NNNM(NNNM), X secs]    <- depth back to 0 → event closed
+      A new `[GC ...` line is treated as a continuation while depth > 0
+      (rather than flushing the previous event) — O(1) amortized check
+      vs. the previous O(n) `s.count("[") == s.count("]")` approach.
     """
     events: List[RawGCEvent] = []
     state = _State.SEEKING
     current_lines: List[str] = []
+    bracket_depth = 0
     has_heap_before = False
     has_heap_after = False
     start_line = 0
@@ -191,6 +206,7 @@ def parse_to_raw_events(text: str) -> List[RawGCEvent]:
             if _open_new_event(body):
                 current_lines = [line]
                 start_line = line_idx
+                bracket_depth = _line_depth_delta(line)
                 has_heap_after = False
                 state = _State.IN_EVENT
                 continue
@@ -216,6 +232,7 @@ def parse_to_raw_events(text: str) -> List[RawGCEvent]:
             if _open_new_event(body):
                 current_lines = [line]
                 start_line = line_idx
+                bracket_depth = _line_depth_delta(line)
                 has_heap_before = True
                 has_heap_after = False
                 state = _State.IN_EVENT
@@ -235,6 +252,7 @@ def parse_to_raw_events(text: str) -> List[RawGCEvent]:
                 if current_lines:
                     _finalize_event(events, current_lines, start_line, has_heap_before, has_heap_after)
                     current_lines = []
+                    bracket_depth = 0
                     has_heap_before = False
                     has_heap_after = False
                 else:
@@ -250,35 +268,22 @@ def parse_to_raw_events(text: str) -> List[RawGCEvent]:
             # MUST come BEFORE the generic secs] check, because a new event
             # line itself contains `secs]` in its closing line — and we want
             # it to flush the previous event, not be absorbed as a continuation.
-            # EXCEPTION: G1 Full GC with embedded concurrent events like:
-            #   [Full GC (cause) ... [GC concurrent-...start]
-            #     ...
-            #      NNNM->NNNM(NNNM), X secs]    <- closing `]` here
-            # The current event body has unbalanced brackets (`[` count != `]`
-            # count), so the Full GC is still open. The new `[GC ...` line is
-            # logically a continuation.
+            # EXCEPTION: G1 Full GC with embedded concurrent events has
+            # `bracket_depth > 0` until the final `secs]` line. In that case
+            # the new `[GC ...` line is a continuation.
             if not is_indented and _open_new_event(body):
-                merged_so_far = " ".join(current_lines)
-                if current_lines and not _brackets_balanced(merged_so_far):
+                if current_lines and bracket_depth > 0:
                     # Event still open (unbalanced brackets): append as continuation
                     current_lines.append(line)
+                    bracket_depth += _line_depth_delta(line)
                     continue
                 _finalize_event(events, current_lines, start_line, has_heap_before, has_heap_after)
                 current_lines = [line]
                 start_line = line_idx
+                bracket_depth = _line_depth_delta(line)
                 has_heap_before = False
                 has_heap_after = False
                 state = _State.IN_EVENT
-                continue
-
-            # `[Times: ...]` closes the event immediately
-            if body.startswith("[Times:"):
-                current_lines.append(line)
-                _finalize_event(events, current_lines, start_line, has_heap_before, has_heap_after)
-                current_lines = []
-                has_heap_before = False
-                has_heap_after = False
-                state = _State.SEEKING
                 continue
 
             # `[Times: ...]` line: append as continuation (matches the original
@@ -287,13 +292,16 @@ def parse_to_raw_events(text: str) -> List[RawGCEvent]:
             # when a new [GC line starts (or at EOF).
             if body.startswith("[Times:"):
                 current_lines.append(line)
+                bracket_depth += _line_depth_delta(line)
                 continue
 
             # Closing line with `secs]`: append and close event
             if _is_event_close(body):
                 current_lines.append(line)
+                bracket_depth += _line_depth_delta(line)
                 _finalize_event(events, current_lines, start_line, has_heap_before, has_heap_after)
                 current_lines = []
+                bracket_depth = 0
                 has_heap_before = False
                 has_heap_after = False
                 state = _State.SEEKING
@@ -311,6 +319,7 @@ def parse_to_raw_events(text: str) -> List[RawGCEvent]:
             if _RE_OPENS_HEAP_BEFORE.search(body):
                 _finalize_event(events, current_lines, start_line, has_heap_before, has_heap_after)
                 current_lines = []
+                bracket_depth = 0
                 has_heap_before = False
                 has_heap_after = False
                 state = _State.IN_HEAP_BEFORE
@@ -320,6 +329,7 @@ def parse_to_raw_events(text: str) -> List[RawGCEvent]:
             if _is_safepoint(line):
                 _finalize_event(events, current_lines, start_line, has_heap_before, has_heap_after)
                 current_lines = []
+                bracket_depth = 0
                 has_heap_before = False
                 has_heap_after = False
                 state = _State.SEEKING
@@ -328,11 +338,13 @@ def parse_to_raw_events(text: str) -> List[RawGCEvent]:
             # Default: continuation line (no timestamp) — append
             if not is_ts:
                 current_lines.append(line)
+                bracket_depth += _line_depth_delta(line)
                 continue
 
             # Other timestamped line (shouldn't normally happen): flush and treat as new
             _finalize_event(events, current_lines, start_line, has_heap_before, has_heap_after)
             current_lines = []
+            bracket_depth = 0
             has_heap_before = False
             has_heap_after = False
             state = _State.SEEKING
@@ -364,8 +376,3 @@ def _flatten_to_merged_lines(events: List[RawGCEvent]) -> List[str]:
         else:
             merged.append(" ".join(ev.raw_lines))
     return merged
-
-
-def _flatten_to_preprocessed_lines(events: List[RawGCEvent]) -> List[str]:
-    """Alias for _flatten_to_merged_lines — kept for clarity at call sites."""
-    return _flatten_to_merged_lines(events)

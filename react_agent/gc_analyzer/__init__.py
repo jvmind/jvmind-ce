@@ -44,6 +44,22 @@ def parse_gc_log(text: str) -> Dict:
         _count += 1
         if _count > _WINDOW:
             break
+        # JDK8 detection: CommandLine flags header is a deterministic JDK8-only
+        # signal. It typically appears at line 3 (right after the version and
+        # Date stamps). Renaissance page-rank logs can have their first GC
+        # event at non-empty line 434, but the CommandLine flags header is
+        # still at line 3 — so this rule fires before the GC signal scan.
+        # JDK9+ unified logging does NOT emit a CommandLine flags header.
+        if _l.startswith("CommandLine flags:") and any(
+            f in _l
+            for f in (
+                "-XX:+PrintGCDetails",
+                "-XX:+PrintGCTimeStamps",
+                "-XX:+PrintGCDateStamps",
+                "-XX:+PrintGCApplicationStoppedTime",
+            )
+        ):
+            return parse_gc_log_jdk8(text)
         # JDK8 detection
         if not _l.startswith("[") and re.search(r"\[(?:Full )?GC\s", _l) and re.match(r"^[^[\s]", _l):
             return parse_gc_log_jdk8(text)
@@ -59,6 +75,12 @@ def parse_gc_log(text: str) -> Dict:
             r"\[(ParNew|PSYoungGen|DefNew|Tenured|CMS|ParOldGen|PSOldGen|PSPermGen):",
             _l,
         ):
+            return parse_gc_log_jdk8(text)
+        # JDK8 CMS concurrent phase marker: [CMS-concurrent-mark-start] has no
+        # `[GC ` prefix (unlike G1's [GC concurrent-...]). This is a strong
+        # JDK8-only signal — CMS in JDK9+ unified logging uses the
+        # [gc] GC(N) ... format instead.
+        if "[CMS-concurrent-" in _l:
             return parse_gc_log_jdk8(text)
 
     # Otherwise use JDK9+
@@ -256,6 +278,19 @@ def _format_events_for_llm(*, report, sliced, total, offset, limit, filters,
     )
 
     body = []
+    # Build the full-content hint at most once — same report id for every
+    # event in this slice, so no need to repeat it on every event line.
+    report_id = report.get("id") or "?"
+    has_any_raw = any(e.get("raw") for e in sliced)
+    full_content_hint = (
+        f"For full raw_body of any event: read_gc_report({report_id})"
+    )
+    # Surface the hint at the TOP so it survives the max_chars truncation
+    # at the bottom of the function — without this hint, the LLM can be
+    # confused by the explicit `[middle truncated]` marker and assume data
+    # is corrupted rather than intentionally previewed.
+    if has_any_raw:
+        body.append(f"Note: {full_content_hint}")
     for e in sliced:
         eid = e.get("id", "?")
         t = e.get("t") or 0.0
@@ -270,8 +305,31 @@ def _format_events_for_llm(*, report, sliced, total, offset, limit, filters,
         )
         raw = e.get("raw") or ""
         if raw:
-            snippet = raw.replace("\n", " ")[:120]
-            body.append(f"    raw: {snippet}{'...' if len(raw) > 120 else ''}")
+            # Render raw_body as a single line so it fits in the LLM context.
+            # The 120-char limit used to hide most of the body (typical Full GC
+            # raw_body is ~1000 chars; a Young GC with AdaptiveSize continuations
+            # is also ~1000 chars). For long bodies, we show a head + tail
+            # preview — head carries the cause + AdaptiveSizePolicy diagnostics,
+            # tail carries the closing `[PSYoungGen: ...] ..., 0.8364548 secs]`
+            # line with the actual pause duration. Both are essential for the
+            # LLM to diagnose GC events. If the body fits in the budget, show
+            # it whole. If still truncated, the marker says so explicitly and
+            # points the LLM to `read_gc_report` for the full uncut version.
+            raw_single_line = raw.replace("\n", " ")
+            head_chars = 500
+            tail_chars = 400
+            total_len = len(raw_single_line)
+            if total_len <= head_chars + tail_chars:
+                body.append(f"    raw: {raw_single_line}")
+            else:
+                head = raw_single_line[:head_chars]
+                tail = raw_single_line[-tail_chars:]
+                body.append(
+                    f"    raw[preview head {head_chars} + tail {tail_chars} / {total_len} chars]:\n"
+                    f"      {head}\n"
+                    f"      ... [middle truncated] ...\n"
+                    f"      {tail}"
+                )
 
     text = "\n".join(header + body)
     if len(text) > max_chars:

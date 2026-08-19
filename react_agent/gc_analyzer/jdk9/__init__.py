@@ -121,7 +121,7 @@ def parse_gc_log_jdk9(text: str) -> Dict:
                     heap_total_mb=0,
                     duration_ms=0,
                     raw_type=raw_type,
-                    raw_body=body.strip(),
+                    raw_lines=[body.strip()],
                     is_concurrent=is_concurrent,
                 )
                 parsed += 1
@@ -149,7 +149,7 @@ def parse_gc_log_jdk9(text: str) -> Dict:
                 heap_total_mb=_to_mb(float(m.group("ht")), m.group("htu")),
                 duration_ms=float(m.group("dur")),
                 raw_type=raw_type,
-                raw_body=body.strip(),
+                raw_lines=[body.strip()],
                 is_concurrent=is_concurrent,
             )
             key = (gid, cat, raw_type)
@@ -177,7 +177,7 @@ def parse_gc_log_jdk9(text: str) -> Dict:
                         cause=cause,
                         duration_ms=float(m2.group("dur")),
                         raw_type=raw_type,
-                        raw_body=body.strip(),
+                        raw_lines=[body.strip()],
                         is_concurrent=is_concurrent,
                     )
                     parsed += 1
@@ -229,11 +229,16 @@ def parse_gc_log_jdk9(text: str) -> Dict:
     if heap_max_mb is None and events:
         heap_max_mb = max(e.heap_total_mb for e in events) or None
 
-    # Replace each event's raw_body with combined multi-line context for the same GC ID
+    # Replace each event's raw_lines (and raw_body) with combined multi-line
+    # context for the same GC ID. jdk9 unified logging can emit multiple
+    # phase lines for the same GC id (e.g. ZGC Pause Mark Start / Mark End);
+    # we collect them into one RawLines entry so downstream consumers (LLM
+    # diagnostics via the dedicated tool) see the full context.
     for ev in events:
-        combined = "\n".join(gcid_bodies.get(ev.id, [ev.raw_body or ""]))
-        if combined:
-            ev.raw_body = combined
+        raw_lines = gcid_bodies.get(ev.id, [])
+        if raw_lines:
+            ev.raw_lines = list(raw_lines)
+            ev.raw_body = "\n".join(raw_lines)
 
     return {
         "collector": collector or "Unknown",

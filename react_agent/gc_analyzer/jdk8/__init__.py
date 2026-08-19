@@ -10,28 +10,11 @@ from typing import Dict, List, Optional
 from ..base import GCEvent, _to_mb, _iso_to_epoch_ms
 from .base_parser import (
     _RE_TS, _RE_TS_DATE_ONLY, _RE_GEN, _RE_GC_CAUSE, _RE_CONCURRENT, _RE_CONCURRENT_DEDUP, _RE_CMS_CONCURRENT, _RE_REMARK, _RE_CLEANUP, _RE_G1_PAUSE, _RE_HEAP,
-    _preprocess_lines, _detect_collector, _classify_concurrent, _extract_heap, _extract_duration_secs, _extract_metaspace
+    _preprocess_lines, _detect_collector, _classify_concurrent, _extract_heap, _extract_duration_secs, _extract_metaspace, _extract_jvm_args
 )
 from .g1 import parse_g1_pause
 from .generational import parse_generational_gc
 from .preprocess_state import RawGCEvent, parse_to_raw_events
-
-
-def _extract_jvm_args(lines: List[str]) -> Optional[List[str]]:
-    """Extract JVM startup flags from a JDK8 'CommandLine flags:' header line.
-
-    Returns a list of individual flag tokens, or None if not present.
-    """
-    for line in lines:
-        idx = line.find("CommandLine flags:")
-        if idx == -1:
-            continue
-        rest = line[idx + len("CommandLine flags:"):].strip()
-        if not rest:
-            return None
-        args = [tok for tok in rest.split() if tok]
-        return args or None
-    return None
 
 
 def parse_gc_log_jdk8(text: str) -> Dict:

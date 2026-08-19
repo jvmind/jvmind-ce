@@ -171,6 +171,25 @@ def _extract_metaspace(body: str) -> Optional[Tuple[float, float, float]]:
     )
 
 
+def _extract_jvm_args(lines: List[str]) -> Optional[List[str]]:
+    """Extract JVM startup flags from a JDK8 'CommandLine flags:' header line.
+
+    Returns a list of individual flag tokens (whitespace-split), or None if
+    the header is absent. Used for downstream `jvm_args` exposure in the
+    parsed log dict.
+    """
+    for line in lines:
+        idx = line.find("CommandLine flags:")
+        if idx == -1:
+            continue
+        rest = line[idx + len("CommandLine flags:"):].strip()
+        if not rest:
+            return None
+        args = [tok for tok in rest.split() if tok]
+        return args or None
+    return None
+
+
 def _extract_g1_heap_detail(body: str) -> Optional[Tuple[str, str, str, str, str, str]]:
     """Extract G1 detailed heap info from the detail line after pause."""
     m = _RE_G1_HEAP_DETAIL.search(body)
