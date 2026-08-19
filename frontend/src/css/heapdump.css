@@ -524,16 +524,6 @@
 .insp-ref-toolbar { display:flex; gap:6px; margin-bottom:6px; }
 @media (max-width: 720px) { .insp-layout { grid-template-columns:1fr; } }
 
-/* 打开 MAT 分析界面的链接按钮 */
-.hd-open-mat {
-  display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:600;
-  padding:6px 12px; border-radius:var(--radius-md, 8px); text-decoration:none; flex-shrink:0;
-  color:#fff; background:var(--accent,#6366f1); border:1px solid var(--accent,#6366f1);
-  transition:filter .15s ease;
-}
-.hd-open-mat:hover { filter:brightness(1.08); }
-.hd-open-mat svg { width:13px; height:13px; }
-
 /* ---------- MAT 工作台（全屏 /mat/{rid}，react_agent_project 风格） ---------- */
 .mat-page { margin:0; height:100vh; overflow:hidden; background:var(--bg,#0e1116); color:var(--text,#e6edf3); font-family:system-ui,sans-serif; }
 .mat-app { display:grid; grid-template-rows:auto 1fr; height:100vh; width:100%; min-width:0; }

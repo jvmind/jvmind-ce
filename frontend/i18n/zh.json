@@ -1036,7 +1036,7 @@
   "heapdump.insp_load_more": "加载更多",
   "heapdump.insp_ref_noselect": "请先选择一个对象，再查看引用。",
   "heapdump.insp_ref_empty": "无引用。",
-  "heapdump.open_mat": "打开 MAT 分析界面",
+  "heapdump.open_mat": "MAT 分析器中打开",
   "mat.title": "JVMind · MAT 分析",
   "mat.copy_link": "复制链接",
   "mat.ask_ai": "咨询 AI",

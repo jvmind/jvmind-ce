@@ -1036,7 +1036,7 @@
   "heapdump.insp_load_more": "Load more",
   "heapdump.insp_ref_noselect": "Select an object first to view references.",
   "heapdump.insp_ref_empty": "No references.",
-  "heapdump.open_mat": "Open MAT analysis",
+  "heapdump.open_mat": "Open in MAT analyzer",
   "mat.title": "JVMind · MAT Analysis",
   "mat.copy_link": "Copy link",
   "mat.ask_ai": "Ask AI",
