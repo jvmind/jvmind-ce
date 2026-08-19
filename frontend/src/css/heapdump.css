@@ -523,3 +523,12 @@
 .insp-more { margin-top:6px; }
 .insp-ref-toolbar { display:flex; gap:6px; margin-bottom:6px; }
 @media (max-width: 720px) { .insp-layout { grid-template-columns:1fr; } }
+
+/* 打开 MAT 分析界面的链接按钮 */
+.hd-open-mat {
+  display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:600;
+  padding:6px 12px; border-radius:5px; text-decoration:none; flex-shrink:0;
+  color:var(--accent,#4a9eff); background:rgba(74,158,255,.12);
+  border:1px solid rgba(74,158,255,.4);
+}
+.hd-open-mat:hover { background:rgba(74,158,255,.22); }

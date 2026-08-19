@@ -641,7 +641,7 @@ export function renderHeapdumpReportInto(container, report, options = {}) {
 
   const reportUrl = `${location.origin}/heapdump-report/${report.id}`;
   const openLink = isStandalone ? "" : `
-    <a href="${reportUrl}" target="_blank" rel="noopener" class="btn" id="hdOpenNewBtn" style="font-size:11px;padding:4px 10px;text-decoration:none;flex-shrink:0;">${ico('link')} ${escapeHtml(t("heapdump.report_url"))}</a>`;
+    <a href="${reportUrl}" target="_blank" rel="noopener" class="hd-open-mat" id="hdOpenNewBtn" title="${escapeHtml(t("heapdump.open_mat"))}">${ico('external-link')} ${escapeHtml(t("heapdump.open_mat"))}</a>`;
   const metaRow = `
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
       <div style="flex:1;min-width:0;font-size:11px;color:var(--text-dim);">${escapeHtml(fmtBytes(report.size))} · ${escapeHtml(fmtDate(report.created_at))}</div>

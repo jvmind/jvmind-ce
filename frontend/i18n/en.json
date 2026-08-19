@@ -1035,5 +1035,6 @@
   "heapdump.insp_references": "References",
   "heapdump.insp_load_more": "Load more",
   "heapdump.insp_ref_noselect": "Select an object first to view references.",
-  "heapdump.insp_ref_empty": "No references."
+  "heapdump.insp_ref_empty": "No references.",
+  "heapdump.open_mat": "Open MAT analysis"
 }

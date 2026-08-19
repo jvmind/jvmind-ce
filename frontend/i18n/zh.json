@@ -1035,5 +1035,6 @@
   "heapdump.insp_references": "引用",
   "heapdump.insp_load_more": "加载更多",
   "heapdump.insp_ref_noselect": "请先选择一个对象，再查看引用。",
-  "heapdump.insp_ref_empty": "无引用。"
+  "heapdump.insp_ref_empty": "无引用。",
+  "heapdump.open_mat": "打开 MAT 分析界面"
 }
