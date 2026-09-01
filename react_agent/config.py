@@ -46,6 +46,16 @@ def _master_key() -> bytes:
     return _derive_key(raw)
 
 
+def master_key_available() -> bool:
+    """Whether a master encryption key is configured (CONFIG_ENCRYPTION_KEY).
+
+    Uploaded-file storage uses this to pick the storage backend: encrypted
+    when a key exists, plaintext gzip otherwise. Kept separate from
+    ``_master_key()`` so callers can branch without triggering its RuntimeError.
+    """
+    return bool(os.getenv("CONFIG_ENCRYPTION_KEY", "").strip())
+
+
 def _candidate_keys() -> list[bytes]:
     keys: list[bytes] = []
     env_key = os.getenv("CONFIG_ENCRYPTION_KEY", "").strip()

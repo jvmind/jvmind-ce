@@ -431,13 +431,13 @@ export function renderJstackReport(report) {
   if (!isReportOnly) {
     const sendBtn = document.getElementById("jstackSendToAgentBtn");
     if (sendBtn && report.id) {
-      sendBtn.onclick = () => sendToAgent('jstack', report.id, report.filename);
+      sendBtn.onclick = () => sendToAgent('jstack', report.id, report.filename, '', '', report.file_id);
     }
   }
   document.querySelectorAll(".report-feedback").forEach(bindFeedbackWidget);
   if (!isReportOnly) {
     document.querySelectorAll(".waiter-thread").forEach(el => {
-      el.onclick = () => sendToAgent('jstack_thread', report.id, report.filename, el.dataset.thread);
+      el.onclick = () => sendToAgent('jstack_thread', report.id, report.filename, el.dataset.thread, '', report.file_id);
     });
   }
   // 线程表格分页
@@ -500,7 +500,7 @@ export function initThreadTable(allThreads, report) {
         <td>${escapeHtml(String(th.depth ?? ""))}</td>
         <td class="top-frame" title="${frame}">${frame}</td>
         <td style="color:${th.lock_waiting ? 'var(--orange)' : 'var(--text-dim)'};font-size:10px;">${lockW}</td>
-        <td>${!document.body.classList.contains("report-only") ? `<button class="analyze-btn" data-act="send-thread" data-report-id="${escapeHtml(String(report.id ?? ""))}" data-filename="${escapeHtml(report.filename || "")}" data-thread="${escapeHtml(th.name || "")}">${t("jstack.send_to_agent")}</button>` : ''}</td>
+        <td>${!document.body.classList.contains("report-only") ? `<button class="analyze-btn" data-act="send-thread" data-report-id="${escapeHtml(String(report.id ?? ""))}" data-filename="${escapeHtml(report.filename || "")}" data-file-id="${escapeHtml(String(report.file_id ?? ""))}" data-thread="${escapeHtml(th.name || "")}">${t("jstack.send_to_agent")}</button>` : ''}</td>
       </tr>
       <tr id="${rowId}" style="display:none;">
         <td colspan="8" class="expand-frame open"><pre class="jstack-frame-pre">${framesText}</pre></td>
@@ -512,7 +512,7 @@ export function initThreadTable(allThreads, report) {
       const sendBtn = ev.target.closest('[data-act="send-thread"]');
       if (sendBtn) {
         ev.stopPropagation();
-        sendToAgent('jstack_thread', sendBtn.dataset.reportId, sendBtn.dataset.filename || '', sendBtn.dataset.thread || '', sendBtn);
+        sendToAgent('jstack_thread', sendBtn.dataset.reportId, sendBtn.dataset.filename || '', sendBtn.dataset.thread || '', sendBtn, sendBtn.dataset.fileId || '');
         return;
       }
       const row = ev.target.closest('[data-act="toggle-stack"]');
@@ -727,7 +727,7 @@ jstackSidebarList.addEventListener("click", async (e) => {
           report = {
             id: historyItem.id,
             filename: historyItem.filename,
-            file_id: "",
+            file_id: historyItem.file_id || "",
           };
         }
       }

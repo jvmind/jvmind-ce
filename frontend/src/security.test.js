@@ -100,6 +100,7 @@ describe('jstack initThreadTable — 事件委托（无内联 onclick）', () =>
     window.sendToAgent = spy;
     const trickyName = "thread';alert(1);'";
     const trickyFile = "f\"><x>.txt";
+    const trickyFid = "fid\"><x>";
     const threads = [{
       name: trickyName,
       state: 'RUNNABLE',
@@ -109,7 +110,7 @@ describe('jstack initThreadTable — 事件委托（无内联 onclick）', () =>
       lock_waiting: null,
       frames: [],
     }];
-    initThreadTable(threads, { id: 'rid_4', filename: trickyFile });
+    initThreadTable(threads, { id: 'rid_4', filename: trickyFile, file_id: trickyFid });
 
     const btn = document.querySelector('[data-act="send-thread"]');
     expect(btn).not.toBeNull();
@@ -121,6 +122,7 @@ describe('jstack initThreadTable — 事件委托（无内联 onclick）', () =>
     expect(args[1]).toBe('rid_4');
     expect(args[2]).toBe(trickyFile);   // 原始值（未被破坏）经 dataset 还原
     expect(args[3]).toBe(trickyName);
+    expect(args[5]).toBe(trickyFid);    // file_id 同样经 dataset 还原
   });
 
   it('点击行应切换对应栈帧行的显示', () => {

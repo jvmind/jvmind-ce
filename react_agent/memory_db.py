@@ -722,6 +722,7 @@ class DatabaseMemory:
                 out.append({
                     "id": r.id,
                     "filename": r.filename,
+                    "file_id": r.file_id,
                     "created_at": r.created_at or "",
                     "total_threads": stats.get("total_threads"),
                     "blocked_count": stats.get("by_state", {}).get("BLOCKED", 0),

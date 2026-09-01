@@ -68,3 +68,13 @@ def test_module_helper_get_uploaded_text(tmp_path, monkeypatch):
         db.close()
 
     assert get_uploaded_text(mem, "fid_xyz") == "thread dump body"
+
+
+def test_save_uploaded_text_without_key_falls_back_to_plain_gzip(tmp_path, monkeypatch):
+    """无 CONFIG_ENCRYPTION_KEY 时回退明文 gzip，保证原文仍可持久化/读取。"""
+    monkeypatch.delenv("CONFIG_ENCRYPTION_KEY", raising=False)
+    mem = _new_memory(tmp_path, monkeypatch)
+    from react_agent.upload_storage import load_uploaded_text
+    meta = save_uploaded_text("u_test_1", "fid_plain", "jstack", "plain thread dump")
+    assert meta["storage_backend"] == "local_gzip"
+    assert load_uploaded_text(meta["storage_backend"], meta["storage_key"]) == "plain thread dump"

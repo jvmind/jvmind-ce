@@ -6,7 +6,7 @@ import hashlib
 import os
 from pathlib import Path
 
-from .config import decrypt_secret, encrypt_secret
+from .config import decrypt_secret, encrypt_secret, master_key_available
 
 
 def _base_dir() -> Path:
@@ -56,14 +56,28 @@ def save_uploaded_text(user_id: str, file_id: str, content_type: str, text: str)
     path = _base_dir() / key
     path.parent.mkdir(parents=True, exist_ok=True)
     raw = text.encode("utf-8")
-    compressed = gzip.compress(raw)
-    encrypted = encrypt_secret(base64.b64encode(compressed).decode())
-    path.write_text(encrypted, encoding="utf-8")
+    size = len(raw)
+    sha256 = hashlib.sha256(raw).hexdigest()
+    if master_key_available():
+        compressed = gzip.compress(raw)
+        encrypted = encrypt_secret(base64.b64encode(compressed).decode())
+        path.write_text(encrypted, encoding="utf-8")
+        return {
+            "storage_backend": "local_encrypted_gzip",
+            "storage_key": key.replace("\\", "/"),
+            "size": size,
+            "sha256": sha256,
+        }
+    # 无 CONFIG_ENCRYPTION_KEY：回退明文 gzip（CE 单机本地场景）。
+    # 此前 encrypt_secret 会抛 RuntimeError，被上传路由吞掉后原文从未持久化，
+    # 导致 jstack 线程钻取 / GC 原文读取拿到空文本。load/delete 已支持该 backend。
+    with gzip.open(path, "wb") as f:
+        f.write(raw)
     return {
-        "storage_backend": "local_encrypted_gzip",
+        "storage_backend": "local_gzip",
         "storage_key": key.replace("\\", "/"),
-        "size": len(raw),
-        "sha256": hashlib.sha256(raw).hexdigest(),
+        "size": size,
+        "sha256": sha256,
     }
 
 

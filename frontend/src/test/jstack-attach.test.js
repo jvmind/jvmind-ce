@@ -97,6 +97,7 @@ function makeHistoryItem(id, filename, created_at) {
   return {
     id, filename, created_at, status: 'DONE', has_ai: false,
     session_id: 'sid_test', total_threads: 100, blocked_count: 0, deadlock_count: 0,
+    file_id: 'fid_' + id,
   };
 }
 
@@ -142,6 +143,7 @@ describe('attach button on JStack history items (sidebar)', () => {
     );
     expect(attached).toBeDefined();
     expect(attached.filename).toBe('app-threads.txt');
+    expect(attached.file_id).toBe('fid_js_a');
   });
 
   it('attaches a session item (data-session="true") too (existing path)', () => {

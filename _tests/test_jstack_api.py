@@ -291,7 +291,10 @@ class TestAPI:
         _upload(client, sid)
         r = client.get(f"/api/sessions/{sid}/jstack/reports")
         assert r.status_code == 200
-        assert len(r.json()["reports"]) >= 1
+        reports = r.json()["reports"]
+        assert len(reports) >= 1
+        # file_id 必须暴露给前端/工具，否则线程钻取的最新报告回退拿不到
+        assert all("file_id" in rep for rep in reports)
 
     def test_get_report(self, auth_client):
         client, _ = auth_client

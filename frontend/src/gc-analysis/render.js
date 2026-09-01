@@ -474,6 +474,7 @@ export function renderReport(report) {
         sendEventBtn.dataset.filename || '',
         sendEventBtn.dataset.eventId,
         sendEventBtn,
+        '',
         sendEventBtn.dataset.rawEnc || ''
       );
       return;
@@ -516,13 +517,13 @@ window.toggleAiCollapse = (e) => {
 };
 
 // ---------- 发送到 Agent ----------
-window.sendToAgent = (type, reportId, filename, extra, btnEl, rawTypeEnc) => {
+window.sendToAgent = (type, reportId, filename, extra, btnEl, fileId, rawTypeEnc) => {
   if (!reportId) return;
 
   const ctxType = type.includes('jstack') ? 'jstack' : 'gc';
   // Ensure report in state.activeReportContexts
   if (!state.activeReportContexts.some(c => c.report_id === reportId)) {
-    const report = { id: reportId, filename: filename || '', file_id: '' };
+    const report = { id: reportId, filename: filename || '', file_id: fileId || '' };
     bindReportContext(ctxType, report);
   }
 
