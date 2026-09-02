@@ -253,7 +253,6 @@
   "chat.session_updated": "该会话有新消息",
   "chat.session_refresh": "点击刷新",
   "auth.login_title": "🔐 登录",
-  "auth.demo_banner": "🧪 试用账户: demo@jvmind.io / Demo1234（点击自动填入）",
   "auth.register_title": "📝 注册",
   "auth.username": "邮箱账户",
   "auth.username_placeholder": "输入邮箱账户",

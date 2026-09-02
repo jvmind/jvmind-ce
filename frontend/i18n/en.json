@@ -253,7 +253,6 @@
   "chat.session_updated": "This session has new messages",
   "chat.session_refresh": "Click to refresh",
   "auth.login_title": "🔐 Login",
-  "auth.demo_banner": "🧪 Trial: demo@jvmind.io / Demo1234 (click to auto-fill)",
   "auth.register_title": "📝 Register",
   "auth.username": "Email account",
   "auth.username_placeholder": "Enter email account",
