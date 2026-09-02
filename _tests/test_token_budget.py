@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import os
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from react_agent.memory.token_budget import (
-    compute_tokens,
+    _estimate_tokens,
+    _get_encoding,
     assemble_with_budget,
-    MODEL_CONTEXT_WINDOWS,
+    compute_tokens,
 )
 
 
@@ -21,6 +23,58 @@ def test_compute_tokens_uses_cl100k_for_deepseek():
 def test_compute_tokens_unknown_model_falls_back():
     n = compute_tokens("hello", "model-that-does-not-exist")
     assert n > 0
+
+
+def test_estimate_tokens_pure_ascii():
+    assert _estimate_tokens("") == 0
+    assert _estimate_tokens("hello") >= 1
+
+
+def test_estimate_tokens_cjk():
+    tokens = _estimate_tokens("你好世界")
+    assert tokens >= 1
+    assert tokens < 10
+
+
+def test_estimate_tokens_mixed():
+    tokens = _estimate_tokens("hello 你好")
+    assert tokens >= 1
+
+
+def test_get_encoding_fallback_on_error():
+    import react_agent.memory.token_budget as mod
+
+    saved_cache = mod._ENCODING_CACHE.copy()
+    saved_flag = mod._USE_FALLBACK
+    try:
+        mod._ENCODING_CACHE.clear()
+        mod._USE_FALLBACK = False
+        with patch("tiktoken.get_encoding", side_effect=ConnectionError("network unreachable")):
+            enc = _get_encoding("deepseek-chat")
+            assert enc is None
+            assert mod._USE_FALLBACK is True
+    finally:
+        mod._ENCODING_CACHE.clear()
+        mod._ENCODING_CACHE.update(saved_cache)
+        mod._USE_FALLBACK = saved_flag
+
+
+def test_compute_tokens_fallback_when_tiktoken_unavailable():
+    import react_agent.memory.token_budget as mod
+
+    saved_cache = mod._ENCODING_CACHE.copy()
+    saved_flag = mod._USE_FALLBACK
+    try:
+        mod._ENCODING_CACHE.clear()
+        mod._USE_FALLBACK = False
+        with patch("tiktoken.get_encoding", side_effect=ConnectionError("network unreachable")):
+            n = compute_tokens("hello world", "deepseek-chat")
+            assert n > 0
+            assert mod._USE_FALLBACK is True
+    finally:
+        mod._ENCODING_CACHE.clear()
+        mod._ENCODING_CACHE.update(saved_cache)
+        mod._USE_FALLBACK = saved_flag
 
 
 def test_assemble_with_budget_keeps_last_turns():

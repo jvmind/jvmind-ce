@@ -1,10 +1,12 @@
 """Token-aware system-prompt budget assembly."""
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 import tiktoken
 
+log = logging.getLogger(__name__)
 
 ENCODINGS: Dict[str, str] = {
     "deepseek-chat": "cl100k_base",
@@ -26,22 +28,60 @@ MODEL_CONTEXT_WINDOWS: Dict[str, int] = {
 }
 DEFAULT_CONTEXT_WINDOW = 32000
 
-_ENCODING_CACHE: Dict[str, tiktoken.Encoding] = {}
+_ENCODING_CACHE: Dict[str, Optional[tiktoken.Encoding]] = {}
+
+_USE_FALLBACK = False
 
 
-def _get_encoding(model: str) -> tiktoken.Encoding:
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate when tiktoken is unavailable.
+
+    Chinese characters ≈ 1.5 chars/token, ASCII ≈ 4 chars/token.
+    We use the more conservative (smaller) count so budget trimming is
+    still effective.
+    """
+    if not text:
+        return 0
+    cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+    other = len(text) - cjk
+    return max(1, int(cjk / 1.5 + other / 4))
+
+
+def _get_encoding(model: str) -> Optional[tiktoken.Encoding]:
+    global _USE_FALLBACK
+    if _USE_FALLBACK:
+        return None
+
     name = ENCODINGS.get(model, DEFAULT_ENCODING)
     enc = _ENCODING_CACHE.get(name)
-    if enc is None:
+    if enc is not None:
+        return enc
+    if name in _ENCODING_CACHE and _ENCODING_CACHE[name] is None:
+        return None
+
+    try:
         enc = tiktoken.get_encoding(name)
         _ENCODING_CACHE[name] = enc
-    return enc
+        return enc
+    except (OSError, ValueError) as exc:
+        log.warning(
+            "tiktoken encoding %r unavailable (%s), falling back to "
+            "character-level estimation",
+            name,
+            exc,
+        )
+        _ENCODING_CACHE[name] = None
+        _USE_FALLBACK = True
+        return None
 
 
 def compute_tokens(text: str, model: str) -> int:
     if not text:
         return 0
-    return len(_get_encoding(model).encode(text))
+    enc = _get_encoding(model)
+    if enc is not None:
+        return len(enc.encode(text))
+    return _estimate_tokens(text)
 
 
 def get_context_window(model: str) -> int:
