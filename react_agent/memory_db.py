@@ -344,6 +344,9 @@ class DatabaseMemory:
         finally:
             self.close()
     def clear_messages(self, session_id: str) -> None:
+        """清空会话消息，并删除该会话的系统上下文事实（[context:summary] /
+        [context:last_tool] 等），否则下次对话仍会把清空前的摘要注入 system
+        prompt，模型会“记得”已清空的历史。用户显式 remember 的长期记忆保留。"""
         try:
             s = self.db.query(SessionModel).filter(SessionModel.id == session_id).first()
             if not s:
@@ -351,6 +354,10 @@ class DatabaseMemory:
             if s.user_id and s.user_id != self._user_id :
                 return
             self.db.query(MessageModel).filter(MessageModel.session_id == session_id).delete()
+            self.db.query(FactModel).filter(
+                FactModel.session_id == session_id,
+                FactModel.content.like("[context:%"),
+            ).delete(synchronize_session=False)
             s.updated_at = _now_iso()
             self.db.commit()
 
