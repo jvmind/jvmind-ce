@@ -26,7 +26,20 @@ window.marked = globalThis.marked;
 window.DOMPurify = globalThis.DOMPurify;
 
 const messages = await import('./messages.js');
-const { appendMessage, createMsgActions, renderStep, toggleObs, renderMessages, renderFacts } = messages;
+const { appendMessage, createMsgActions, renderStep, toggleObs, renderMessages, renderFacts, scrollToBottom, scrollToBottomIfPinned, sendMessage } = messages;
+
+function mockScrollHeight(px) {
+  Object.defineProperty(document.getElementById('chatArea'), 'scrollHeight', {
+    configurable: true,
+    get: () => px,
+  });
+}
+
+function scrollTo(userPx) {
+  const area = document.getElementById('chatArea');
+  area.scrollTop = userPx;
+  area.dispatchEvent(new Event('scroll'));
+}
 
 beforeEach(() => {
   document.getElementById('chatArea').innerHTML = '';
@@ -328,5 +341,144 @@ describe('sendMessage stop button', () => {
     btn.click();
     await vi.waitFor(() => expect(btn.classList.contains('stop-mode')).toBe(false));
     expect(document.querySelector('.typing-cursor')).toBeNull();
+  });
+});
+
+describe('scroll follow (stick-to-bottom)', () => {
+  beforeEach(() => {
+    document.getElementById('chatArea').scrollTop = 0;
+    mockScrollHeight(1000);
+    scrollToBottom();
+  });
+
+  it('scrollToBottom re-pins: token scroll moves to bottom after user scrolled away', () => {
+    scrollTo(400);                 // user scrolls away from bottom
+    expect(scrollToBottomIfPinned()).toBeUndefined();
+    const area = document.getElementById('chatArea');
+    expect(area.scrollTop).toBe(400);   // still where the user left it
+
+    scrollToBottom();              // e.g. user sends a new message
+    expect(area.scrollTop).toBe(1000);
+    scrollToBottomIfPinned();      // next stream token
+    expect(area.scrollTop).toBe(1000);
+  });
+
+  it('does not scroll while user is away from the bottom', () => {
+    scrollTo(400);
+    const area = document.getElementById('chatArea');
+    scrollToBottomIfPinned();
+    expect(area.scrollTop).toBe(400);
+  });
+
+  it('resumes following once the user scrolls back near the bottom', () => {
+    scrollTo(400);
+    const area = document.getElementById('chatArea');
+    scrollToBottomIfPinned();
+    expect(area.scrollTop).toBe(400);   // paused
+
+    scrollTo(950);                       // user scrolls back down
+    scrollToBottomIfPinned();
+    expect(area.scrollTop).toBe(1000);   // following resumed
+  });
+});
+
+describe('scroll follow during streaming', () => {
+  let fetchCalls;
+  let readController;
+
+  beforeEach(() => {
+    fetchCalls = [];
+    readController = null;
+    state.isStreaming = false;
+    state.llmConfigured = true;
+    state.currentSessionId = 'sess-123';
+    document.getElementById('msg').value = 'hi';
+    document.getElementById('chatArea').innerHTML = '';
+    document.getElementById('chatArea').scrollTop = 0;
+    mockScrollHeight(1000);
+    const btn = document.getElementById('sendBtn');
+    btn.classList.remove('stop-mode');
+    btn.textContent = '';
+    btn.disabled = false;
+    app.loadSessions = vi.fn();
+    app.updateQuotaUI = vi.fn();
+
+    globalThis.fetch = vi.fn(async (url, opts) => {
+      fetchCalls.push({ url, opts });
+      if (url === '/api/chat/stream') {
+        // Queued reader: each read() returns the next queued chunk (or waits),
+        // so a test can enqueue multiple chunks + done without re-yielding.
+        const queue = [];
+        let resolveNext = null;
+        readController = {
+          push(sseText) {
+            if (resolveNext) { resolveNext({ value: new TextEncoder().encode(sseText), done: false }); resolveNext = null; }
+            else queue.push({ value: new TextEncoder().encode(sseText), done: false });
+          },
+          done() {
+            if (resolveNext) { resolveNext({ done: true }); resolveNext = null; }
+            else queue.push({ done: true });
+          },
+        };
+        if (opts.signal) {
+          opts.signal.onabort = () => {};
+        }
+        return {
+          ok: true,
+          status: 200,
+          body: {
+            getReader: () => ({
+              read: () => {
+                if (queue.length) return Promise.resolve(queue.shift());
+                return new Promise((resolve) => { resolveNext = resolve; });
+              },
+              cancel: vi.fn(),
+            }),
+          },
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true }), text: async () => '{}' };
+    });
+  });
+
+  function pushChunk(sseText) {
+    readController.push(sseText);
+  }
+  function endStream() {
+    readController.done();
+  }
+
+  it('leaves the scroll position alone while the user has scrolled up during a stream', async () => {
+    const btn = document.getElementById('sendBtn');
+    btn.click();
+    await vi.waitFor(() => expect(fetchCalls.some((c) => c.url === '/api/chat/stream')).toBe(true));
+
+    scrollTo(400);                 // user scrolls up to read earlier content
+    pushChunk('data: {"type":"token","phase":"final","content":"answer"}\n\n');
+    endStream();
+
+    await vi.waitFor(() => expect(btn.classList.contains('stop-mode')).toBe(false));
+    expect(document.getElementById('chatArea').scrollTop).toBe(400);
+  });
+
+  it('re-pins to the bottom on the next send and follows the stream again', async () => {
+    const btn = document.getElementById('sendBtn');
+    btn.click();
+    await vi.waitFor(() => expect(fetchCalls.some((c) => c.url === '/api/chat/stream')).toBe(true));
+
+    scrollTo(400);                 // user scrolled away during the previous stream
+    pushChunk('data: {"type":"token","phase":"final","content":"prev"}\n\n');
+    endStream();
+    await vi.waitFor(() => expect(btn.classList.contains('stop-mode')).toBe(false));
+
+    // new message: sendMessage() re-pins before streaming
+    const secondStream = sendMessage('second message');
+    expect(document.getElementById('chatArea').scrollTop).toBe(1000);
+
+    scrollTo(800);                 // user scrolls up again (outside tolerance)
+    pushChunk('data: {"type":"token","phase":"final","content":"next"}\n\n');
+    endStream();
+    await secondStream;
+    expect(document.getElementById('chatArea').scrollTop).toBe(800);
   });
 });

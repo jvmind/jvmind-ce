@@ -8,6 +8,16 @@ import { ico } from './icons.js';
 
 const _s = s => s.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{27BF}]/gu, '').trim();
 
+// ---------- 跟随滚动 ----------
+// 流式输出期间只在用户“贴底”时自动滚到底部；用户向上翻阅时暂停跟随，
+// 滚回底部附近后自动恢复。避免每个 token 到达都把视口强制拉回底部。
+let _followBottom = true;
+const SCROLL_TOLERANCE = 80;
+document.getElementById("chatArea").addEventListener("scroll", () => {
+  const area = document.getElementById("chatArea");
+  _followBottom = area.scrollHeight - area.scrollTop - area.clientHeight <= SCROLL_TOLERANCE;
+});
+
 export function renderMessages(msgs) {
   const area = document.getElementById("chatArea");
   area.innerHTML = "";
@@ -86,6 +96,14 @@ async function hydrateFeedbackStates() {
 }
 
 export function scrollToBottom() {
+  const area = document.getElementById("chatArea");
+  area.scrollTop = area.scrollHeight;
+  _followBottom = true;
+}
+
+// 流式事件专用：仅在用户仍贴底时滚动，用户已向上翻阅则保持不变。
+export function scrollToBottomIfPinned() {
+  if (!_followBottom) return;
   const area = document.getElementById("chatArea");
   area.scrollTop = area.scrollHeight;
 }
@@ -397,12 +415,12 @@ export async function sendMessage(explicitText) {
           finalBuf += data.content;
           finalDiv.innerHTML = renderMarkdown(finalBuf) + '<span class="typing-cursor"></span>';
         }
-        scrollToBottom();
+        scrollToBottomIfPinned();
       } else if (type === "step") {
         stepCounter++;
         stepCountEl.textContent = `(${stepCounter})`;
         renderStep(traceBody, data.step);
-        scrollToBottom();
+        scrollToBottomIfPinned();
       } else if (type === "tool_start") {
         upsertToolCard(toolCardsEl, {
           event: "start",
@@ -410,7 +428,7 @@ export async function sendMessage(explicitText) {
           name: data.name,
           args: data.args,
         });
-        scrollToBottom();
+        scrollToBottomIfPinned();
       } else if (type === "tool_end") {
         upsertToolCard(toolCardsEl, {
           event: "end",
@@ -420,7 +438,7 @@ export async function sendMessage(explicitText) {
           observation: data.observation,
           status: data.status,
         });
-        scrollToBottom();
+        scrollToBottomIfPinned();
       } else if (type === "step.progress") {
         updateToolCardProgress(toolCardsEl, {
           tool_call_id: data.tool_call_id,
@@ -437,7 +455,7 @@ export async function sendMessage(explicitText) {
         finalDiv.innerHTML = renderMarkdown(finalBuf);
         // (handled by helpers; no-op)
         finalizeCardsOnDone(toolCardsEl);
-        scrollToBottom();
+        scrollToBottomIfPinned();
       } else if (type === "fact_added") {
         // 刷新 facts
         api(`/api/sessions/${state.currentSessionId}/facts`).then(r => renderFacts(r.facts));
@@ -455,7 +473,7 @@ export async function sendMessage(explicitText) {
           finalDiv.innerHTML = renderMarkdown(finalBuf || t("chat.no_reply"));
         }
         // (no-op: thinking/title references removed)
-        scrollToBottom();
+        scrollToBottomIfPinned();
         app.updateQuotaUI();
         wrap.dataset.content = hadStreamError ? streamErrorText : finalBuf;
         if (!wrap.querySelector('.msg-actions')) {
@@ -803,7 +821,7 @@ export function toggleCard(card) {
 window.toggleCard = toggleCard;
 
 Object.assign(app, {
-  renderMessages, appendMessage, scrollToBottom, renderFacts,
+  renderMessages, appendMessage, scrollToBottom, scrollToBottomIfPinned, renderFacts,
   createMsgActions, sendMessage, renderStep, toggleObs, setAuthorNames,
   // Exported for tests + future use:
   appendThinkingToken, upsertToolCard, updateToolCardProgress,
