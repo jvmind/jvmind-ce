@@ -41,6 +41,30 @@ def test_build_system_prompt_renders_tool_calling_mode_suffix():
     assert "do NOT write 'Thought:'" in rendered
 
 
+def test_system_prompt_contains_optimization_advice_guardrails():
+    """The system prompt must include the optimization-advice guardrails
+    (evidence-based, root-cause vs symptom, causal consistency, uncertainty),
+    so the agent does not emit counter-productive tuning suggestions."""
+    from react_agent.prompts import build_system_prompt
+
+    rendered = build_system_prompt(
+        tool_names=["foo"],
+        tool_descriptions="- foo(x): does foo",
+        facts=[],
+        template="",
+        extra="",
+        lang="en",
+    )
+    # Rule 9: evidence-based advice
+    assert "must be evidence-based" in rendered
+    # Rule 10: root cause vs symptom
+    assert "Distinguish root cause from symptom" in rendered
+    # Rule 11: causal consistency with the root cause
+    assert "causally consistent with the root cause" in rendered
+    # Rule 12: uncertainty → ask
+    assert "Uncertainty" in rendered and "don't speculate" in rendered
+
+
 def test_render_system_prompt_does_not_pass_function_calling():
     """The live LangGraph render path (``nodes._render_system_prompt``) must
     not pass a removed ``function_calling`` kwarg — that was the regression
