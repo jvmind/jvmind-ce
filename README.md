@@ -70,6 +70,21 @@ The agent uses native OpenAI function-calling, so any model supporting `tools` w
 
 > **Privacy**: When using Ollama with a local model, no data ever leaves your machine — all GC logs, thread dumps, heap dumps, and conversation content stay local.
 
+
+### Remote / hosted OpenAI-compatible providers
+
+Community-listed options — not endorsed or vetted by the JVMind team:
+
+**DemonRoute** (demonroute.com) — a hosted gateway to open-weight models, through the generic OpenAI-compatible path:
+
+```bash
+OPENAI_BASE_URL=https://api.demonroute.com/v1
+OPENAI_API_KEY=<your DemonRoute key>
+OPENAI_MODEL=<any slug from https://demonroute.com/models>
+```
+
+Two things upfront: it is prepaid (crypto or card, with a hard stop at $0), and DemonRoute states that it keeps no IP logs and does not retain prompts — that is their claim, not a JVMind finding. GC logs and thread dumps can carry hostnames and customer data, so weigh any hosted provider accordingly. The agent relies on native tool calling, so test a model against the tool paths before recommending it.
+
 ---
 
 ## Features
