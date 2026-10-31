@@ -72,6 +72,20 @@ Agent 使用原生 OpenAI function-calling，任何支持 `tools` 参数的模�
 
 > **隐私说明**：使用 Ollama 本地模型时，所有数据（GC 日志、线程转储、堆转储、对话内容）都不会离开你的机器。
 
+### 远程 / 托管型 OpenAI 兼容服务商
+
+以下为社区列出，未经 JVMind 团队审核或背书：
+
+**DemonRoute**（[demonroute.com](https://demonroute.com/)）—— 通过通用 OpenAI 兼容路径接入的开放权重模型托管网关：
+
+```bash
+OPENAI_BASE_URL=https://api.demonroute.com/v1
+OPENAI_API_KEY=<你的 DemonRoute 密钥>
+OPENAI_MODEL=<https://demonroute.com/models 中的任意 slug>
+```
+
+先说明两点：它采用预付费（加密货币或银行卡，余额为 $0 即硬性停止）；DemonRoute 自称不记录 IP 日志、不保留提示词——这是对方的说法，并非 JVMind 的结论。GC 日志与线程转储可能包含主机名和客户数据，选用任何托管服务商前请自行权衡。Agent 依赖原生 tool calling，推荐某个模型前请先用工具链路径实测。
+
 ---
 
 ## 功能
